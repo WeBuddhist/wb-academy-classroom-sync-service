@@ -23,8 +23,8 @@ class Config:
     is_production: bool = os.environ.get("ENV") == "production"
     port: int = int(os.environ.get("PORT", "8000"))
 
-    # Left unset deliberately: Postgres vs MySQL is still open.
-    # See docs/PORT-TO-PYTHON.md, "Open questions".
+    #: Tutor's own MySQL, in its own database beside the LMS and notes ones.
+    #: Form: mysql://user:password@mysql:3306/classroom
     database_url: str | None = os.environ.get("DATABASE_URL")
 
     #: Shared secret that permits creating a room. Not a per-user credential.

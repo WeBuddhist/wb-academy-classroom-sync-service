@@ -23,10 +23,10 @@ idempotent, and translation layers can be added later without touching the proto
 is retired once the port is proven. The client moves separately into
 `frontend-app-extension`.
 
-Read **[docs/PORT-TO-PYTHON.md](docs/PORT-TO-PYTHON.md)** before working on this — it has
-the two tracks, the thirteen details that must survive the rewrite, and the open
-decisions. **[docs/PLAN.md](docs/PLAN.md)** has the original design and the reasoning
-behind each locked decision.
+Read **[docs/BUILD-PLAN.md](docs/BUILD-PLAN.md)** before working on this — it has the
+three tracks, the thirteen details that must survive the rewrite, and the open decisions.
+**[docs/PLAN.md](docs/PLAN.md)** has the original design; where the two disagree the build
+plan is current, and it says where and why.
 
 Done so far: the service stands up and answers `/api/health`. Rooms, texts and the socket
 events are next.
@@ -70,6 +70,42 @@ reverse_proxy /classroom-api/* classroom:8000
 
 Same origin as the page, so no CORS and no extra subdomain.
 
+## This server stores segment ids, not text
+
+**No work's content is ever stored here.** The reader fetches text from the OpenPecha
+library directly, so this server never serves it and has no reason to keep it.
+
+What it keeps is each text's **id list**, so it can answer the only question it needs to:
+*is this segment part of this room's text?* Without that, a bad id would either go
+unchecked or put the library on the live path of every teacher tap.
+
+A text is registered the first time a room is created against it, by fetching its segment
+list once. This replaces the original design's import pipeline — there is no longer a step
+between "find a text" and "teach it".
+
+The trade: if the library is down **and** a student joins **after** that, the latecomer
+cannot load the text. Everyone already in the room is unaffected — their text is in their
+browser, and sync carries only ids. Judged worth it against maintaining an import
+pipeline and a copy of the corpus.
+
+## Database
+
+**MySQL 8.4** — Tutor's own instance, in a database of its own beside the LMS and notes
+ones. `migrations/001_init.sql` is the whole schema: four tables, none holding content.
+
+Two notes, both explained in the file:
+
+- Identifier columns are `utf8mb4_bin`. Tutor runs MySQL with
+  `--collation-server=utf8mb4_unicode_ci`, which is **case-insensitive**, and segment ids
+  are opaque values from the content pipeline — we cannot assume their case is
+  insignificant.
+- Indexed columns are `VARCHAR`, not `TEXT`, because MySQL cannot index `TEXT` without a
+  prefix length.
+- The key is a **segmentation**, not a text. Segment ids belong to a segmentation, which
+  belongs to an edition; two editions of one work give different ids for the same line.
+  A room pins what its ids actually came from, resolved once at registration, so thirty
+  students cannot resolve thirty different editions.
+
 ## Layout
 
 ```
@@ -93,13 +129,16 @@ same, which is the only thing it is there for.
 API_URL=http://localhost:8000 node tests/smoke.mjs
 ```
 
-**11/11 means the port is done.**
+**19/19 means the port is done.**
 
-## Open decisions
+## The socket contract
 
-- **Postgres or MySQL.** The rescued schema is Postgres; Tutor ships MySQL. No database
-  driver is pinned yet because of this. See the port plan.
-- **Where the socket contract lives.** `docs/socket-contract.ts` is the rescued
-  TypeScript definition, kept as reference. Python cannot import it, and the client now
-  lives in another repo — so the thing that stopped the two sides drifting no longer
-  works. See the port plan, Track B.
+**[docs/socket-contract.md](docs/socket-contract.md)** is the spec — a written document,
+not code. Python cannot import TypeScript and the client lives in another repo, so the
+shared import that used to keep the two sides honest is gone both ways.
+
+What replaces it: `tests/smoke.mjs` guards the server, and the spec's types copied into
+the MFE guard the client. The hazard is specific and quiet — Python writes `segment_id`,
+JavaScript expects `segmentId`, both sides build fine, and thirty screens do nothing.
+
+Open decisions are tracked in the build plan.

@@ -22,6 +22,11 @@ dependencies = [
   "fastapi",
   "uvicorn[standard]",
   "python-socketio",
+  # MySQL, because Tutor already runs one (8.4) and already backs it up. Async,
+  # because the whole service is. `asyncmy` is the faster alternative if this ever
+  # becomes the bottleneck, which for four tables and a classroom's worth of traffic
+  # it will not.
+  "aiomysql",
 ]
 
 [project.optional-dependencies]

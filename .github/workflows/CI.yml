@@ -35,7 +35,7 @@ jobs:
   # the whole point of keeping it. Do not rewrite it in Python: a rewritten test
   # no longer proves the behaviour is the same.
   #
-  # Unskip once the server answers. See docs/PORT-TO-PYTHON.md, Track A.
+  # Unskip once the server answers. See docs/BUILD-PLAN.md, Track A.
   smoke:
     runs-on: ubuntu-latest
     if: false

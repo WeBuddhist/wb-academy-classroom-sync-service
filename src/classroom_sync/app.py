@@ -1,7 +1,7 @@
 """The service.
 
 Track A, Step 1: it stands up and answers. Rooms, texts and the socket events come
-next — see docs/PORT-TO-PYTHON.md.
+next — see docs/BUILD-PLAN.md.
 
 The Socket.IO server is mounted here from the start, even with no events attached,
 because it is what this service exists for and the mounting is the part most easily
