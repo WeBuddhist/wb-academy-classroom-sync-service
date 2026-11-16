@@ -542,6 +542,34 @@ A port that also changes behaviour has no way of telling a port bug from a desig
   fallback is an anonymous join with notes prompting for login on first use — but that is
   a change to make on evidence, not in advance.
 
+- **Room creation stays on the shared `HOST_PASSWORD`.** No Open edX role check.
+
+  Considered and rejected on purpose, because requiring login made the obvious objection
+  weaker rather than stronger: the page is behind `AuthenticatedPageRoute`, so a leaked
+  password now means "someone with an Academy account *and* the password", not "anyone".
+
+  It also guards the cheap thing. The shared password lets you *create* a room; it gives
+  no power over an existing one. That is the per-room **host token** — generated at
+  creation, shown once, stored only as a sha256 hash. Someone who learns `HOST_PASSWORD`
+  can make junk rooms and cannot touch a running class.
+
+  The real cost is revocation: removing one teacher's access means changing it for all of
+  them. **Revisit when teachers number in the dozens, or when someone leaves on bad
+  terms** — that is the tripwire, not a date.
+
+  Keeping it also leaves the smoke test's tested path alone, which is worth something
+  during a rewrite.
+
+- **A room takes whatever edition the library lists first.** No edition picker.
+
+  The consistency problem is already solved: the edition is resolved **once, server-side,
+  at registration**, and every student uses the one the room pinned. What is deferred is
+  only the teacher's *choice* — if a work has three editions, they get the first and are
+  not asked.
+
+  For a work with one edition this is invisible, which is most of them. Handle it when a
+  real text makes it matter; Track A Step 2 will show how often that is.
+
 - **Secrets follow the existing pattern.** Checked, and the chain is already right: the
   Tutor folder is not a git repo, the plugin's code reads environment variables rather
   than hardcoding, and the real values live in `config.yml`. `docker-compose.yml` looks

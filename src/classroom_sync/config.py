@@ -43,5 +43,6 @@ def warn_on_insecure_defaults(log) -> None:
     if config.host_password == DEFAULT_HOST_PASSWORD:
         log(
             f'HOST_PASSWORD is still "{DEFAULT_HOST_PASSWORD}". Anyone who can reach '
-            "this server can create a room and drive a class. Set it before deploying."
+            "this server can create rooms. It does not let them take over an existing "
+            "one — that is the per-room host token — but set it before deploying."
         )
