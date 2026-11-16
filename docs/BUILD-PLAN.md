@@ -465,7 +465,7 @@ student.
 
 *Done when:* it feels instant, and a reconnect lands on the current line.
 
-### Step 5 — Tutor plugin
+### Step 5 — Tutor plugin ✅
 **One Python file** in `~/Library/Application Support/tutor-plugins/classroom.py`, then
 `tutor plugins enable classroom`. That is the whole deployment mechanism — the old
 `infra/native/` Caddyfile and systemd unit become patches inside it.
@@ -581,8 +581,34 @@ Do not run `tutor local start` on a development machine: Tutor will stop the dev
 containers to start the local ones. They share a data volume, so nothing is lost, but
 the stack goes down.
 
-*Done when:* `tutor local launch` brings it up and `/classroom-api/api/health` answers
-through Caddy, on the MFE's own domain.
+*Done.* The plugin is [`infra/tutor/classroom.py`](../infra/tutor/classroom.py) in this
+repo, copied to
+`~/Library/Application Support/tutor-plugins/classroom.py` and enabled. Verified under
+`tutor dev`: **19/19 smoke, 15/15 routes, 16/16 proxy** against the Tutor-managed
+container, using Tutor's own generated `HOST_PASSWORD` and database password. Editing
+`src/` on the host and running `tutor dev restart classroom` picks the change up with no
+rebuild.
+
+Two things only running it revealed:
+
+- **`tutor dev` does not run Caddy.** It is declared in `docker-compose.prod.yml`, which
+  only `tutor local` loads. So `/classroom-api/*` does not exist in dev and the browser
+  cannot reach the service at all unless its port is published. The dev patch publishes
+  `CLASSROOM_DEV_PORT` (8010, clear of the LMS on 8000 and the MFEs on 1995–2004), and
+  `CLASSROOM_API_URL` points there in development and at the Caddy path in production.
+  This corrects the earlier claim in this document that the same-origin argument held
+  everywhere: **it holds under `tutor local` only.**
+- **An init task needs a `<service>-job` container**, declared through
+  `local-docker-compose-jobs-services`, or `tutor do init` fails with
+  `no such service: classroom-job`. Its environment is shared with the service's from
+  one definition, so a migration cannot be applied to a different database than the
+  service reads.
+
+The schema is applied by `python -m classroom_sync.migrate` rather than a mysql client,
+because the image is `python:3.12-slim` and has none. It is safe on every init, which is
+what `create table if not exists` throughout buys — the warnings MySQL raises for
+already-existing tables are suppressed, since four of them per run reads as a problem
+when it is the normal case.
 
 ### Step 6 — Switch over, keep the old one
 Point the client at the Python server. **Leave the Node server runnable** for the first

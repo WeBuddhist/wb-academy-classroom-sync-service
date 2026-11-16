@@ -83,6 +83,33 @@ the dev containers to do it.
 
 ## How it reaches Open edX
 
+**[`infra/tutor/classroom.py`](infra/tutor/classroom.py)** is the Tutor plugin. Copy it
+to `tutor-plugins/`, then:
+
+```bash
+tutor plugins enable classroom && tutor config save && tutor images build classroom
+```
+
+Tutor generates `HOST_PASSWORD` and the database password itself, so there is nothing to
+set but the library credentials:
+
+```bash
+tutor config save --set CLASSROOM_LIBRARY_APP_NAME=… --set CLASSROOM_LIBRARY_API_KEY=…
+```
+
+On a development machine also set `CLASSROOM_SOURCE_DIR` to this checkout: the image
+then builds from it and `src/` is mounted, so an edit needs only
+`tutor dev restart classroom`. Leave it empty on a server and the image builds straight
+from the repository.
+
+`tutor dev do init --limit=classroom` creates the database and applies the schema.
+
+**`tutor dev` has no Caddy** — it lives in `docker-compose.prod.yml`, which only
+`tutor local` loads. So in dev the service publishes port 8010 and the page reaches it
+there, cross-origin; in production it is a path on the MFE's own origin. The plugin
+handles both, and `CLASSROOM_API_URL` in the MFE's runtime config points at whichever
+applies.
+
 One Python file in `tutor-plugins/` runs this as a service container beside the LMS, the
 way `studio_tool_service.py` and `tutornotes` already do. Tutor builds the image itself —
 there is no registry and nothing to publish.

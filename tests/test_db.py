@@ -49,3 +49,17 @@ def test_the_port_defaults_to_3306():
 def test_a_bad_url_fails_at_startup_not_at_first_query(url, reason):
     with pytest.raises(ValueError):
         parse_database_url(url)
+
+
+def test_the_migration_splitter_handles_our_sql():
+    """The init task runs this inside the container, which has no mysql client."""
+    import pathlib
+
+    from classroom_sync.migrate import statements
+
+    sql = (pathlib.Path(__file__).resolve().parents[1] / "migrations" / "001_init.sql").read_text()
+    parts = statements(sql)
+    assert len(parts) == 4, f"expected four CREATE TABLEs, got {len(parts)}"
+    assert all(p.lower().startswith("create table if not exists") for p in parts), \
+        "every statement must be re-runnable — Tutor applies this on every init"
+    assert not any("--" in p for p in parts), "comments must be stripped"
