@@ -9,12 +9,18 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Dependencies first, so a source change does not reinstall them.
+# `pyproject.toml` declares a src layout (`packages.find.where = ["src"]`), so
+# setuptools cannot even read requirements without that directory present. The usual
+# "copy the manifest, install deps, then copy source" split therefore does not work
+# here: it fails with `'src' does not exist or is not a directory`.
+#
+# One layer instead. The cost is that editing source reinstalls dependencies; with
+# four of them that is seconds, and it keeps pyproject.toml the single source of
+# truth for what this service needs.
 COPY pyproject.toml README.md ./
-RUN pip install --no-cache-dir .
-
 COPY src/ ./src/
 COPY migrations/ ./migrations/
+RUN pip install --no-cache-dir .
 
 # Not root. The service needs nothing on disk beyond what it was built with.
 RUN useradd --create-home --uid 10001 classroom

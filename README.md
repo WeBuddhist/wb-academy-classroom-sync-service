@@ -61,14 +61,22 @@ pytest
 
 ## How it reaches Open edX
 
-A Tutor plugin runs this as a service container beside the LMS, the way
-`studio-tool-service` and `notes` already are. The MFE's Caddy forwards one path to it:
+One Python file in `tutor-plugins/` runs this as a service container beside the LMS, the
+way `studio_tool_service.py` and `tutornotes` already do. Tutor builds the image itself —
+there is no registry and nothing to publish.
+
+`tutormfe` leaves a patch point inside the MFE's own Caddy site block, so the route hangs
+off the MFE host:
 
 ```
-reverse_proxy /classroom-api/* classroom:8000
+handle_path /classroom-api/* {
+    reverse_proxy classroom:8000
+}
 ```
 
-Same origin as the page, so no CORS and no extra subdomain.
+Same origin as the page, so no CORS and no extra subdomain. Tutor also generates
+`HOST_PASSWORD` and the database password per install via `CONFIG_UNIQUE`, and creates
+the database in an init task. See the build plan, Track A Step 5.
 
 ## This server stores segment ids, not text
 

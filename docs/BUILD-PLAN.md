@@ -302,7 +302,19 @@ worth keeping.
 ### Step 1 — Stand it up empty ✅
 FastAPI with a health route, Socket.IO mounted, running in a container.
 
-*Done:* `/api/health` answers, `/socket.io/` completes an Engine.IO handshake.
+*Done, verified in the image itself:* `/api/health` answers, `/socket.io/` completes an
+Engine.IO handshake advertising `upgrades: ["websocket"]`, the process runs as uid 10001
+rather than root, the `HOST_PASSWORD` warning reaches the logs, and `migrations/` ships
+inside the image.
+
+The Dockerfile needed a fix to get here. It installed dependencies before copying
+`src/`, the usual layer-caching split — but `pyproject.toml` declares a src layout, so
+setuptools could not read its own requirements and the build failed with `'src' does not
+exist or is not a directory`. Source is now copied before the install. Build takes about
+25 seconds.
+
+`wb-classroom-sync:dev` is just a local build name for this check. Under Tutor the image
+is named and built by the plugin (Step 5), and never pushed anywhere.
 
 ### Step 2 — The web routes
 Register a text (search the library by title, **resolve it to one edition and
@@ -330,11 +342,98 @@ student.
 *Done when:* it feels instant, and a reconnect lands on the current line.
 
 ### Step 5 — Tutor plugin
-A plugin patching this service into `docker-compose.yml`, plus a Caddy route. The old
-`infra/native/` Caddyfile and systemd unit become those patches — same configuration,
-different wrapper.
+**One Python file** in `~/Library/Application Support/tutor-plugins/classroom.py`, then
+`tutor plugins enable classroom`. That is the whole deployment mechanism — the old
+`infra/native/` Caddyfile and systemd unit become patches inside it.
 
-*Done when:* it runs under Tutor and answers through Caddy.
+Two plugins in this install are the working precedents: `studio_tool_service.py` (a
+custom service of ours, built from a local checkout) and `tutornotes` (an upstream
+service with its own MySQL database). Between them they already demonstrate every piece
+the classroom needs. Read both before writing this.
+
+**There is no registry and no image to publish.** Tutor builds it:
+
+```python
+@hooks.Filters.IMAGES_BUILD.add()
+def _build_image(images, config):
+    source_dir = config["CLASSROOM_SOURCE_DIR"]
+    if source_dir:                      # laptop: a checkout on this machine
+        images.append(("classroom", source_dir, "{{ CLASSROOM_DOCKER_IMAGE }}", ()))
+    elif config["CLASSROOM_REPOSITORY"]:  # server: Docker fetches the git URL itself
+        ...
+```
+
+`tutor images build classroom`. On a server it builds straight from
+`https://github.com/WeBuddhist/wb-academy-classroom-sync-service.git#main` — Docker reads
+a git URL natively, so nothing is cloned first and a rebuild picks up new commits.
+
+#### The secrets problem solves itself
+
+`CONFIG_UNIQUE` generates a value once, at `tutor config save`, and keeps it in
+`config.yml`:
+
+```python
+hooks.Filters.CONFIG_UNIQUE.add_items([
+    ("CLASSROOM_HOST_PASSWORD", "{{ 32|random_string }}"),
+    ("CLASSROOM_MYSQL_PASSWORD", "{{ 8|random_string }}"),
+])
+```
+
+**So `HOST_PASSWORD` is never `change-me` in a real deployment** — Tutor generates a
+32-character one per install. The startup warning stays for people running the service
+outside Tutor; inside it, the default is unreachable.
+
+#### The database is created by an init task
+
+`tutornotes` shows the pattern exactly: a `mysql` init task creating the database, the
+user and the grant, registered through `CLI_DO_INIT_TASKS` so `tutor local init` runs it.
+
+```
+CREATE DATABASE IF NOT EXISTS {{ CLASSROOM_MYSQL_DATABASE }};
+CREATE USER IF NOT EXISTS '{{ CLASSROOM_MYSQL_USERNAME }}';
+ALTER USER ... IDENTIFIED BY '{{ CLASSROOM_MYSQL_PASSWORD }}';
+GRANT ALL ON {{ CLASSROOM_MYSQL_DATABASE }}.* TO ...;
+```
+
+A second init task applies `migrations/001_init.sql`, which ships inside the image.
+`001_init.sql` is written to be re-runnable, so the task is safe on every `init`.
+
+#### The Caddy route is a path, not a subdomain
+
+`tutormfe` leaves a patch point **inside** the MFE's own site block:
+
+```
+import proxy "mfe:8002"
+{{ patch("caddyfile-mfe-proxy")|indent(4) }}
+```
+
+So the plugin adds:
+
+```
+handle_path /classroom-api/* {
+    reverse_proxy classroom:8000
+}
+```
+
+**Same origin as the page, so no CORS and no new subdomain** — Caddy orders `handle_path`
+ahead of the catch-all proxy, which is what that patch point is for. (`notes` takes a
+subdomain instead; we do not need to, and a second origin would mean CORS and a second
+certificate.)
+
+#### The patches, in full
+
+| Hook | What it adds |
+|---|---|
+| `CONFIG_DEFAULTS` | image name, source dir, repository, database name |
+| `CONFIG_UNIQUE` | `HOST_PASSWORD`, MySQL password |
+| `IMAGES_BUILD` | builds from a checkout or from the git URL |
+| `CLI_DO_INIT_TASKS` | create the database; apply the migration |
+| `local-docker-compose-services` | the container itself |
+| `local-docker-compose-dev-services` | mounts `src/` in `tutor dev`, so an edit needs only a restart |
+| `caddyfile-mfe-proxy` | `/classroom-api/*` on the MFE host |
+
+*Done when:* `tutor local launch` brings it up and `/classroom-api/api/health` answers
+through Caddy, on the MFE's own domain.
 
 ### Step 6 — Switch over, keep the old one
 Point the client at the Python server. **Leave the Node server runnable** for the first
