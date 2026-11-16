@@ -1,0 +1,13 @@
+.git
+.github
+docs
+infra
+tests
+.venv
+venv
+__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache
+.pre-commit-config.yaml
+setup.cfg

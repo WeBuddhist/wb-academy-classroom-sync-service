@@ -3,28 +3,44 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "project_name"
-version = "0.0.1"
-authors = [
-  { name="OpenPecha", email="dev@openpecha.org" },
-]
-description = "A small example package"
+name = "classroom-sync-service"
+version = "0.1.0"
+description = "Realtime sync server for live Tibetan text classes"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.12"
+authors = [{ name = "WeBuddhist" }]
 classifiers = [
-    "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
-    "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3.12",
+  "License :: OSI Approved :: MIT License",
+  "Private :: Do Not Upload",
+]
+
+# This is a service, not a library. It is never published to PyPI and never
+# pip-installed by anything else — it ships as a container image. The metadata
+# above exists so the tooling works, not so the package can be distributed.
+dependencies = [
+  "fastapi",
+  "uvicorn[standard]",
+  "python-socketio",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest",
-    "pytest-cov",
-    "pre-commit",
+  "pytest",
+  "pytest-asyncio",
+  "pytest-cov",
+  "httpx",          # FastAPI's TestClient
+  "pre-commit",
 ]
 
-
 [project.urls]
-"Homepage" = "https://github.com/OpenPecha/openpecha-project-template"
-"Bug Tracker" = "https://github.com/OpenPecha/openpecha-project-template/issues"
+Homepage = "https://github.com/WeBuddhist/wb-academy-classroom-sync-service"
+Issues = "https://github.com/WeBuddhist/wb-academy-classroom-sync-service/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+asyncio_default_fixture_loop_scope = "function"

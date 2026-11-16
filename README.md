@@ -1,148 +1,105 @@
-# README
+# wb-academy-classroom-sync-service
 
-> **Note:** This readme template is based on one from the [Good Docs Project](https://thegooddocsproject.dev). You can find it and a guide to filling it out [here](https://gitlab.com/tgdp/templates/-/tree/main/readme). (_Erase this note after filling out the readme._)
+Realtime sync server for live Tibetan text classes. The teacher drives; every student's
+reader highlights and scrolls to the same line.
 
-<h1 align="center">
-  <br>
-  <a href="https://openpecha.org"><img src="https://avatars.githubusercontent.com/u/82142807?s=400&u=19e108a15566f3a1449bafb03b8dd706a72aebcd&v=4" alt="OpenPecha" width="150"></a>
-  <br>
-</h1>
+Students join a room with a short code the teacher writes on the whiteboard — no
+accounts. Because Tibetan prose runs as unbroken syllables with no word spaces, losing
+your place is the default experience in these classes; this removes that.
 
-## _Project Name_
-_The project name should match its code's capability so that new users can easily understand what it does._
+## The one rule
 
-## Owner(s)
+The only thing that travels between teacher and student is a **segment id**. Never a DOM
+range, never a character offset, never a scroll position. A segment id means the same
+line on a phone, a tablet and a projector, at any font size, in any text layer — which is
+what makes one teacher's click land correctly on thirty different screens.
 
-_Change to the owner(s) of the new repo. (This template's owners are:)_
-- [@ngawangtrinley](https://github.com/ngawangtrinley)
-- [@mikkokotila](https://github.com/mikkokotila)
-- [@evanyerburgh](https://github.com/evanyerburgh)
+Everything else follows from it: late joiners just ask for the current id, reconnects are
+idempotent, and translation layers can be added later without touching the protocol.
 
+## Status
 
-## Table of contents
-<p align="center">
-  <a href="#project-description">Project description</a> •
-  <a href="#who-this-project-is-for">Who this project is for</a> •
-  <a href="#project-dependencies">Project dependencies</a> •
-  <a href="#instructions-for-use">Instructions for use</a> •
-  <a href="#contributing-guidelines">Contributing guidelines</a> •
-  <a href="#additional-documentation">Additional documentation</a> •
-  <a href="#how-to-get-help">How to get help</a> •
-  <a href="#terms-of-use">Terms of use</a>
-</p>
-<hr>
+**Being ported.** This service replaces the Node server in `wb-academy-classroom`, which
+is retired once the port is proven. The client moves separately into
+`frontend-app-extension`.
 
-## Project description
-_Use one of these:_
+Read **[docs/PORT-TO-PYTHON.md](docs/PORT-TO-PYTHON.md)** before working on this — it has
+the two tracks, the thirteen details that must survive the rewrite, and the open
+decisions. **[docs/PLAN.md](docs/PLAN.md)** has the original design and the reasoning
+behind each locked decision.
 
-With _Project Name_ you can _verb_ _noun_...
+Done so far: the service stands up and answers `/api/health`. Rooms, texts and the socket
+events are next.
 
-_Project Name_ helps you _verb_ _noun_...
+## Scope
 
+This repo is **the sync server only**.
 
-## Who this project is for
-This project is intended for _target user_ who wants to _user objective_.
+- **The client** is a page in `frontend-app-extension`; its styles live in
+  `brand-openedx`.
+- **Text processing** — segmenting Tibetan into addressable lines — is a content-pipeline
+  concern and lives elsewhere.
+- **Text data.** No corpus, no source files, no segmented output is ever committed here.
+  In production the service receives texts from the WeBuddhist content API.
 
+## Running it
 
-## Project dependencies
-Before using _Project Name_, ensure you have:
-* python _version_
-* _Prerequisite 2_
-* _Prerequisite 3..._
+```bash
+pip install -e ".[dev]"
+uvicorn classroom_sync.app:app --reload --port 8000
+```
 
+```bash
+curl localhost:8000/api/health
+```
 
-## Instructions for use
-Get started with _Project Name_ by _(write the first step a user needs to start using the project. Use a verb to start.)_.
+Tests:
 
+```bash
+pytest
+```
 
-### Install _Project Name_
-1. _Write the step here._ 
+## How it reaches Open edX
 
-    _Explanatory text here_ 
-    
-    _(Optional: Include a code sample or screenshot that helps your users complete this step.)_
+A Tutor plugin runs this as a service container beside the LMS, the way
+`studio-tool-service` and `notes` already are. The MFE's Caddy forwards one path to it:
 
-2. _Write the step here._
- 
-    a. _Substep 1_ 
-    
-    b. _Substep 2_
+```
+reverse_proxy /classroom-api/* classroom:8000
+```
 
+Same origin as the page, so no CORS and no extra subdomain.
 
-### Configure _Project Name_
-1. _Write the step here._
-2. _Write the step here._
+## Layout
 
+```
+src/classroom_sync/   the service
+migrations/           database schema
+tests/                pytest, plus smoke.mjs (see below)
+infra/native/         deploy scripts from the Node server, to become Tutor plugin patches
+docs/                 the port plan, the original design, the socket contract
+```
 
-### Run _Project Name_
-1. _Write the step here._
-2. _Write the step here._
+## `tests/smoke.mjs` — read this before touching it
 
+This is the acceptance test for the port, written against the Node server and **kept
+unchanged on purpose**. It talks to a running server over HTTP and a socket and never
+imports server code, so it tests this implementation exactly as it tested the old one.
 
-### Troubleshoot _Project Name_
-1. _Write the step here._
-2. _Write the step here._
+**Do not rewrite it in Python.** A rewritten test no longer proves the behaviour is the
+same, which is the only thing it is there for.
 
-<table>
-  <tr>
-   <td>
-    Issue
-   </td>
-   <td>
-    Solution
-   </td>
-  </tr>
-  <tr>
-   <td>
-    _Describe the issue here_
-   </td>
-   <td>
-    _Write solution here_
-   </td>
-  </tr>
-  <tr>
-   <td>
-    _Describe the issue here_
-   </td>
-   <td>
-    _Write solution here_
-   </td>
-  </tr>
-  <tr>
-   <td>
-    _Describe the issue here_
-   </td>
-   <td>
-    _Write solution here_
-   </td>
-  </tr>
-</table>
+```bash
+API_URL=http://localhost:8000 node tests/smoke.mjs
+```
 
+**11/11 means the port is done.**
 
-Other troubleshooting supports:
-* _Link to FAQs_
-* _Link to runbooks_
-* _Link to other relevant support information_
+## Open decisions
 
-
-## Contributing guidelines
-If you'd like to help out, check out our [contributing guidelines](/CONTRIBUTING.md).
-
-
-## Additional documentation
-_Include links and brief descriptions to additional documentation._
-
-For more information:
-* [Reference link 1](#)
-* [Reference link 2](#)
-* [Reference link 3](#)
-
-
-## How to get help
-* File an issue.
-* Email us at openpecha[at]gmail.com.
-* Join our [discord](https://discord.com/invite/7GFpPFSTeA).
-
-
-## Terms of use
-_Project Name_ is licensed under the [MIT License](/LICENSE.md).
+- **Postgres or MySQL.** The rescued schema is Postgres; Tutor ships MySQL. No database
+  driver is pinned yet because of this. See the port plan.
+- **Where the socket contract lives.** `docs/socket-contract.ts` is the rescued
+  TypeScript definition, kept as reference. Python cannot import it, and the client now
+  lives in another repo — so the thing that stopped the two sides drifting no longer
+  works. See the port plan, Track B.

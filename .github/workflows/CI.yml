@@ -2,34 +2,56 @@ name: CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
 
 permissions:
   contents: read
 
 jobs:
   test:
-
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v3
-    
-    - name: Set up Python 3.8
-      uses: actions/setup-python@v3
-      with:
-        python-version: "3.8"
-        
-    - name: Install dependencies
-      run: |
-        pip install -U pip
-        pip install .
-        pip install .[dev]
-        
-    - name: Test with pytest
-      run: PYTHONPATH=src pytest
-    
-    - name: Test Coverage
-      run: PYTHONPATH=src pytest --cov project_name
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install -U pip
+          pip install .[dev]
+
+      - name: Test with pytest
+        run: pytest --cov classroom_sync
+
+  # The acceptance test for the port, kept exactly as it was written against the
+  # Node server. It talks to a running server over HTTP and a socket and never
+  # imports any server code, so it tests this implementation unchanged — which is
+  # the whole point of keeping it. Do not rewrite it in Python: a rewritten test
+  # no longer proves the behaviour is the same.
+  #
+  # Unskip once the server answers. See docs/PORT-TO-PYTHON.md, Track A.
+  smoke:
+    runs-on: ubuntu-latest
+    if: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install the socket client
+        run: npm install socket.io-client
+
+      - name: Start the server
+        run: echo "TODO: start the service, then run the smoke test against it"
+
+      - name: Smoke test
+        run: API_URL=http://localhost:8000 node tests/smoke.mjs

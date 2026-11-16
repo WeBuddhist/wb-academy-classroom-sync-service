@@ -1,0 +1,45 @@
+[Unit]
+Description=WB Academy Classroom
+Documentation=https://github.com/WeBuddhist/wb-academy-classroom
+# The server runs migrations on startup, so it must not start before the database.
+After=network-online.target postgresql.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+Type=simple
+# A system account with no shell and no sudo. The checkout stays owned by `ubuntu` so
+# git pull keeps working; this user only ever reads it.
+User=wbac
+Group=wbac
+WorkingDirectory=/opt/wbac
+# Holds DATABASE_URL and HOST_PASSWORD. Root-owned, mode 600; systemd reads it
+# before dropping to the app user.
+EnvironmentFile=/etc/wbac.env
+ExecStart=/usr/bin/npm run start -w @wbac/server
+Restart=on-failure
+RestartSec=5s
+# A class should survive a crash without anyone noticing, so never give up restarting.
+StartLimitIntervalSec=0
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=wbac
+
+# The service account has no home directory, so give npm and tsx somewhere writable to
+# put caches and crash logs. systemd creates /var/cache/wbac owned by this user, and it
+# is writable even under ProtectSystem=strict.
+CacheDirectory=wbac
+Environment=HOME=/var/cache/wbac
+Environment=npm_config_cache=/var/cache/wbac/npm
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateDevices=true
+# No ReadWritePaths: the app only reads its checkout. Everything it writes goes to
+# journald, Postgres, or the cache directory above.
+
+[Install]
+WantedBy=multi-user.target
