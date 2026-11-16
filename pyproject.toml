@@ -26,7 +26,14 @@ dependencies = [
   # because the whole service is. `asyncmy` is the faster alternative if this ever
   # becomes the bottleneck, which for four tables and a classroom's worth of traffic
   # it will not.
-  "aiomysql",
+  # The [rsa] extra pulls in `cryptography`. MySQL 8.4 — which is what Tutor runs —
+  # dropped mysql_native_password, so every connection authenticates with
+  # caching_sha2_password, and aiomysql cannot do that without it. Connecting fails
+  # outright otherwise; found by connecting to Tutor's own MySQL, not by reading docs.
+  "aiomysql[rsa]",
+  # Talks to the OpenPecha library. Async, and already present as a test
+  # dependency for FastAPI's TestClient, so this adds nothing new to install.
+  "httpx",
 ]
 
 [project.optional-dependencies]

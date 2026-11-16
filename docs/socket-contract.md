@@ -22,6 +22,12 @@ Two guards, one per side:
 Event names (`room:join`, `teach:goto`) look identical in both languages, so nobody is
 tempted to translate them. **The risk is entirely in the payload field names below.**
 
+It is worse than it looks, because the mistake half-works. MFE code calls
+`camelCaseObject(data)` on HTTP responses by convention, so `segment_id` arriving over
+the HTTP routes is quietly corrected. `socket.io-client` has no such step. The same
+error therefore passes on one path and fails silently on the other, which reads like a
+socket bug rather than a naming bug. See [CONTEXT.md](CONTEXT.md).
+
 ## The whole surface
 
 Eight messages, twelve field names.
@@ -73,8 +79,12 @@ alphabet  ABCDEFGHJKMNPQRSTUVWXYZ23456789
 length    6
 ```
 
-No O/0, no I/1/l, no S/5 — chosen so a code read off a whiteboard from the back of a room
-is unambiguous.
+Excludes **I, L, O, 0 and 1**, so a code read off a whiteboard from the back of a room is
+unambiguous.
+
+S and 5 are both present, despite an earlier claim here that they were not — a test
+caught it. Left unchanged for now: altering the alphabet during a port would blur the
+line between a port bug and a design change.
 
 ## The types
 

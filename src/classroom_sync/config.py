@@ -35,11 +35,23 @@ class Config:
         os.environ.get("WEB_ORIGIN", "http://localhost:5173")
     )
 
+    #: The OpenPecha library. Its host is never seen by a browser: the reader's
+    #: library calls are proxied through this service, which is the only place the
+    #: key exists. A key in a frontend bundle is a published key.
+    library_base_url: str = os.environ.get("LIBRARY_BASE_URL", "")
+    library_app_name: str = os.environ.get("LIBRARY_APP_NAME", "")
+    library_api_key: str = os.environ.get("LIBRARY_API_KEY", "")
+
 
 config = Config()
 
 
 def warn_on_insecure_defaults(log) -> None:
+    if not config.library_base_url:
+        log(
+            "LIBRARY_BASE_URL is not set. Registering a text needs the library, so "
+            "creating a room will fail until it is."
+        )
     if config.host_password == DEFAULT_HOST_PASSWORD:
         log(
             f'HOST_PASSWORD is still "{DEFAULT_HOST_PASSWORD}". Anyone who can reach '

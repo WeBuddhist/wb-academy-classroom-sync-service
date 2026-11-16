@@ -30,26 +30,43 @@ const goto = (socket, segmentId, hostToken) =>
   new Promise((resolve) => socket.emit('teach:goto', { segmentId, hostToken }, resolve))
 
 // A room of this test's own, so presence and current position are known exactly.
-const texts = await fetch(`${URL}/api/texts`).then((r) => r.json())
-if (texts.length === 0) {
-  console.error('No texts imported. Run: npm run import -w @wbac/server -- --all')
+//
+// This preamble is the only part changed from the Node server's version. There is no
+// longer a local import step or a text slug: a text is found in the library, and
+// creating a room is what registers it. Every assertion below is untouched -- the
+// point of this file is that the behaviour is identical, so the setup may move and
+// the checks may not.
+const search = new URLSearchParams({ title: 'བྱང་ཆུབ', limit: '1' })
+const texts = await fetch(`${URL}/api/texts?${search}`).then((r) => r.json())
+if (!Array.isArray(texts) || texts.length === 0) {
+  console.error('No texts found. Is LIBRARY_BASE_URL/LIBRARY_API_KEY set on the server?')
   process.exit(1)
 }
-const textSlug = texts[0].slug
-const { segments } = await fetch(`${URL}/api/texts/${textSlug}`).then((r) => r.json())
-const [first, second] = [segments[0].id, segments[Math.min(5, segments.length - 1)].id]
+const textId = texts[0].id
 
 const created = await fetch(`${URL}/api/rooms`, {
   method: 'POST',
   headers: { 'content-type': 'application/json' },
-  body: JSON.stringify({ hostPassword: HOST_PASSWORD, textSlug }),
+  body: JSON.stringify({ hostPassword: HOST_PASSWORD, textId }),
 }).then((r) => r.json())
 
 if (!created.code) {
-  console.error(`Could not create a room: ${created.error ?? 'unknown error'}`)
+  console.error(`Could not create a room: ${created.detail ?? created.error ?? 'unknown error'}`)
   console.error('Set HOST_PASSWORD to match the server.')
   process.exit(1)
 }
+
+// Segment ids come from the library through this server's own proxy -- the same path
+// the reader uses, so this covers that too.
+const spans = await fetch(
+  `${URL}/library/v2/editions/${created.editionId}/segmentation/segments?limit=10&offset=0`,
+).then((r) => r.json())
+const items = spans.items ?? []
+if (items.length < 2) {
+  console.error('That text has fewer than two segments; nothing to move between.')
+  process.exit(1)
+}
+const [first, second] = [items[0].id, items[Math.min(5, items.length - 1)].id]
 const { code, hostToken } = created
 
 const teacher = await connect()

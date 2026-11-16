@@ -14,11 +14,12 @@
 -- Two MySQL-specific points, both load-bearing:
 --
 -- 1. Identifier columns are `utf8mb4_bin`. Tutor runs MySQL with
---    `--collation-server=utf8mb4_unicode_ci`, which is CASE-INSENSITIVE, so on the
---    server default `S-0001` and `s-0001` would be the same row. Segment ids are
---    opaque values owned by the content pipeline — we are not entitled to assume
---    their case is insignificant. Binary collation restores Postgres behaviour. It
---    also affects sort order, which costs nothing: ordering is by `idx`, never by id.
+--    `--collation-server=utf8mb4_unicode_ci`, which is CASE-INSENSITIVE. Real segment
+--    ids are mixed-case nanoids (`RcoqgTCZ3KpivQ9h1fAr9`), so case is the difference
+--    between two ids, and these are opaque values owned by the content pipeline —
+--    we are not entitled to assume their case is insignificant. Binary collation
+--    restores Postgres behaviour. It also affects sort order, which costs nothing:
+--    ordering is by `idx`, never by id.
 --
 -- 2. Indexed columns are `VARCHAR`, because MySQL cannot index `TEXT` without a
 --    prefix length.
@@ -60,8 +61,14 @@ create table if not exists segmentations (
 ) engine=InnoDB default charset=utf8mb4;
 
 -- The id list, in reading order. That is the whole table — there is no content column
--- and there should never be one. Segment ids are unique only *within* a segmentation
--- (every one has an s-0001), so the key is composite.
+-- and there should never be one.
+--
+-- The key is composite for two reasons, neither of them id collisions. Real ids are
+-- 21-character nanoids (`RcoqgTCZ3KpivQ9h1fAr9`), checked against the live library, so
+-- they do appear globally unique — but they are opaque values owned by the content
+-- pipeline and we are not entitled to depend on that. More concretely, `rooms` guards
+-- its current segment with a composite foreign key onto `(segmentation_id, id)`, and
+-- that guard needs this key to point at.
 create table if not exists segments (
   id              varchar(128) collate utf8mb4_bin not null,
   segmentation_id varchar(255) collate utf8mb4_bin not null,

@@ -175,8 +175,12 @@ import secrets
 code = ''.join(secrets.choice(ROOM_CODE_ALPHABET) for _ in range(6))
 ```
 
-The alphabet deliberately has no `O/0`, no `I/1/l`, no `S/5` — it gets read off a
-whiteboard from the back of a room.
+The alphabet excludes `I`, `L`, `O`, `0` and `1` — it gets read off a whiteboard from
+the back of a room.
+
+**It does not exclude `S`/`5`**, although this document and the contract both claimed it
+did until a test checked. Left as it is during the port; revisit knowingly if a real
+class struggles with it.
 
 ### 2. Compare tokens in constant time
 
@@ -316,11 +320,75 @@ exist or is not a directory`. Source is now copied before the install. Build tak
 `wb-classroom-sync:dev` is just a local build name for this check. Under Tutor the image
 is named and built by the plugin (Step 5), and never pushed anywhere.
 
-### Step 2 — The web routes
+### Step 2 — The web routes ✅
 Register a text (search the library by title, **resolve it to one edition and
 segmentation**, store that segment id list), create a room, look up a room, verify a
 recovery code. Also the library proxy — this service holds the API key, so the reader's
 fetches come through here too.
+
+**The library and storage halves are done** — `library.py`, `db.py`, 15 tests. Verified
+end to end against the live library and Tutor's own MySQL: search → resolve → 1027
+segment ids over 3 pages → stored → re-registration is a no-op → a case-flipped id is
+correctly *not* found.
+
+`scripts/check_library.py` and `scripts/check_register.py` repeat those checks by hand.
+Neither is a pytest: CI must not depend on an upstream service or a Tutor stack, and a
+test needing a secret is a test nobody runs.
+
+Five things running it found, which the code and schema now reflect:
+
+| Found | Consequence |
+|---|---|
+| `title=` empty → **422**, not "list everything" | The param is omitted when blank; a blank search box would otherwise error |
+| Segment ids are 21-char mixed-case nanoids, not `s-0001` | The schema's stated reason for its composite key was wrong — corrected |
+| All 25 texts sampled had **one** critical edition | The deferred edition picker is rare, not theoretical |
+| MySQL 8.4 dropped `mysql_native_password` | `aiomysql[rsa]` is required, or **connecting fails outright** |
+| MySQL 8.4 deprecates `VALUES()` in upserts | Switched to the row-alias form, which works from 8.0.20 |
+
+Registration is **idempotent and does not re-sync**. `rooms.current_segment_id` has a
+foreign key onto `segments` with no ON DELETE, so deleting a segment a live room sits on
+is refused by the database — a re-sync mid-class would fail halfway. Ids change only when
+the pipeline re-segments, which is not something to discover during a lesson; a deliberate
+re-sync belongs in its own operation, run when no room is live.
+
+**The room routes are done too** — `rooms.py`, `routes.py`, 25 unit tests, and
+`scripts/check_rooms.py` passing **15/15** against a server running on Tutor's MySQL and
+the live library:
+
+```
+POST /api/rooms                    create, 401 on a wrong password
+GET  /api/rooms/{code}             lowercase finds it
+POST /api/rooms/{code}/verify-host 401 wrong, 200 right
+GET  /api/texts?title=             live library search
+```
+
+Checklist points 1, 2, 3, 7, 11 and 12 are implemented and covered. Verified in the
+database: host tokens are stored as 64-character sha256 hashes and the raw token appears
+nowhere.
+
+One more thing a test caught: **the room-code alphabet does not exclude `S`/`5`**,
+though this document and the contract both said it did. Corrected in both rather than
+changing the alphabet — see point 1.
+
+**The library proxy is done** — `proxy.py`, 33 unit tests, `scripts/check_proxy.py`
+passing **16/16** against the live library. The reader's whole data path works with no
+key in any request: search → editions → segmentation → spans → real Tibetan content.
+
+It is an **allowlist, not a pass-through**, and that is the important part. Our key can
+write: the library has **38 paths accepting POST, PATCH, PUT or DELETE**, among them
+`DELETE /v2/texts/{id}`, `PATCH /v2/editions/{id}/content` and `POST /v2/applications`.
+A proxy that forwarded whatever it was handed would give every one of those to anyone
+who could load the classroom page, authenticated as us. So: GET only — other verbs are
+not routed and 405 — and only the thirteen paths the reader actually reads. Everything
+else is 403 and never reaches the library.
+
+It is otherwise **transparent**, verified byte-for-byte against a direct call. That
+matters more than it sounds: the library answers an unknown text's `/editions` with
+`200 []` rather than a 404, and `resolveEditionContext` relies on exactly that to tell a
+text id from an edition id. A proxy that tidied it into a 404 would break the copied
+resolution logic in a way that would take a long afternoon to find.
+
+**Track A Step 2 is done.**
 
 Resolve the edition **once, here**. Never let clients resolve independently: the library
 answers a bare text id with its first-listed edition, and thirty students resolving
@@ -328,11 +396,67 @@ separately is how a room ends up with ids that do not match.
 
 *Done when:* the smoke test gets as far as creating a room before failing on the socket.
 
-### Step 3 — The live messages
-`room:join`, `teach:goto`, `room:close`, `presence`, `room:closed`. Work through the
-thirteen points above as a checklist.
+### Step 3 — The live messages ✅
+`room:join`, `teach:goto`, `room:close`, `presence`, `room:closed`, in `events.py`,
+ported from the Node server's `socket.ts`.
 
-*Done when:* **19/19 on the smoke test.**
+**19/19 on the smoke test**, three runs in a row, against Tutor's MySQL and the live
+library. Delivery measured at **35ms**. All thirteen checklist points are now
+implemented.
+
+Only the smoke test's *setup preamble* changed — there is no local import step any
+more, so it finds a text in the library and takes segment ids through this server's own
+proxy, which means it covers that too. **All 19 assertions are byte-identical**,
+verified by diff.
+
+One behaviour was missing and the smoke test caught it: **`verify-host` on a closed room
+must answer 410, not 200.** A valid recovery code on an ended class should say the class
+ended — telling a returning teacher they are the host of a dead room sends them off to
+teach into a room nobody can join. `is_live` is checked *after* the token, so nobody
+without a credential can probe which classes have ended.
+
+Verified in the database afterwards: every move has a `room_log` row (5 rooms with a
+position, 5 with log rows — the transaction held), and closed rooms have both
+`is_live = 0` and `closed_at` set.
+
+The CI job is unskipped. It runs MySQL 8.4 with Tutor's case-insensitive collation, so
+the schema's `utf8mb4_bin` columns are exercised rather than accidentally agreeing, and
+it is gated on the repository's own credentials so a fork's pull request skips it
+instead of failing.
+
+**Needs configuring once:** `LIBRARY_BASE_URL`, `LIBRARY_APP_NAME` and `LIBRARY_API_KEY`
+as GitHub repository secrets.
+
+#### What a review of this step found
+
+Three bugs the tests had missed, all reproduced live and fixed, each now with a
+regression test:
+
+- **A new text stored its own id as its title**, permanently. `post_room` looked the
+  title up with `search_texts(textId)` — a search by *title* using an *id*, which never
+  matches, leaving the fallback to store the id. Every existing test missed it because
+  they reused texts already registered with correct titles, so the broken branch never
+  ran. They were checking the cache, not the code. Now `fetch_text(id)` hits
+  `GET /v2/texts/{id}`.
+- **A closed room could still be driven.** `teach:goto` checked the room and the token
+  but never `is_live`, so a teacher still connected after `room:close` kept moving an
+  ended class — broadcasting, writing a position and growing the log, on a room that
+  refused newcomers. The Node original had the same gap, so the port was faithful and
+  still wrong. Checklist point 13 now actually holds.
+- **`room:close` re-broadcast on an already-closed room.** Now answers `ok` without
+  emitting again, so a client treating `room:closed` as a one-shot transition sees it
+  once.
+
+And one landmine, not yet live: the proxy streamed `aiter_raw()` and forwarded
+`content-length` while dropping `content-encoding`. httpx asks for gzip on every
+request; the library does not compress *today*. The day it does, or a CDN is put in
+front of it, every proxied response would reach the browser as compressed bytes
+labelled `application/json`.
+
+Left open deliberately: **the proxy has no authentication**, so anyone who can reach the
+service can read the library on our key. Nothing can be written — the allowlist sees to
+that — but this is the same question as "does the classroom page's login protect the
+API", and it belongs with that decision at Track B Step 3, not patched quietly here.
 
 ### Step 4 — Two browsers, by hand
 A teacher and a student on two *different* origins — `localhost` and `127.0.0.1`. They
@@ -429,8 +553,33 @@ certificate.)
 | `IMAGES_BUILD` | builds from a checkout or from the git URL |
 | `CLI_DO_INIT_TASKS` | create the database; apply the migration |
 | `local-docker-compose-services` | the container itself |
-| `local-docker-compose-dev-services` | mounts `src/` in `tutor dev`, so an edit needs only a restart |
+| `local-docker-compose-dev-services` | mounts `src/` and widens `WEB_ORIGIN` in `tutor dev` |
 | `caddyfile-mfe-proxy` | `/classroom-api/*` on the MFE host |
+
+#### `tutor dev` locally, `tutor local` on the server
+
+That is the convention here, and the plugin must serve both. It does, because
+**`tutor dev` overlays `tutor local`**: `local-docker-compose-services` lands in
+`env/local/docker-compose.yml`, which dev also reads, and
+`local-docker-compose-dev-services` adds only the differences on top. Verified —
+`studio-tool-service` appears in both files, with the dev one adding nothing but a
+volume.
+
+Two things differ in dev, and both need the plugin's dev patch:
+
+- **Mount the source.** As `studio_tool_service.py` does, so an edit needs a container
+  restart rather than an image rebuild.
+- **Widen `WEB_ORIGIN`.** In dev the extension MFE serves itself on **port 2003**, so
+  the classroom page is at `apps.local.openedx.io:2003` while Caddy answers on
+  `apps.local.openedx.io` with no port. **Those are different origins**, so the
+  same-origin argument above holds in production and not in development. The service
+  already reads `WEB_ORIGIN` for both CORS and the Socket.IO origin check; the dev
+  patch must add the port form. `extension_mfe.py` already does the equivalent for
+  Studio's `CORS_ORIGIN_WHITELIST` — same problem, same shape.
+
+Do not run `tutor local start` on a development machine: Tutor will stop the dev
+containers to start the local ones. They share a data volume, so nothing is lost, but
+the stack goes down.
 
 *Done when:* `tutor local launch` brings it up and `/classroom-api/api/health` answers
 through Caddy, on the MFE's own domain.
@@ -533,6 +682,13 @@ current segment **id** as plain text.
 
 *Done when:* a teacher clicks, and the id changes on a student's screen. This proves the
 whole chain before any rendering work.
+
+**Decide here whether this service validates the login.** `AuthenticatedPageRoute` guards
+the React route, not the endpoint — nothing stops a direct call to `/classroom-api/*`, so
+"joining requires login" is currently a property of the UI. It is a choice rather than a
+blocker: the session cookie's domain is `local.openedx.io`, which browsers also send to
+`apps.local.openedx.io`, and our route is on that host, so the credentials do arrive.
+See [CONTEXT.md](CONTEXT.md).
 
 ### Step 4 — Display the text
 Copy the ~700 lines of fetching and alignment logic. Load the whole text on join. Render
@@ -666,8 +822,9 @@ A port that also changes behaviour has no way of telling a port bug from a desig
   only the teacher's *choice* — if a work has three editions, they get the first and are
   not asked.
 
-  For a work with one edition this is invisible, which is most of them. Handle it when a
-  real text makes it matter; Track A Step 2 will show how often that is.
+  For a work with one edition this is invisible. **Checked against the live library:
+  all 25 texts sampled had exactly one critical edition**, so this is rare rather than
+  theoretical. Handle it when a real text makes it matter.
 
 - **Secrets follow the existing pattern.** Checked, and the chain is already right: the
   Tutor folder is not a git repo, the plugin's code reads environment variables rather

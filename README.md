@@ -23,13 +23,19 @@ idempotent, and translation layers can be added later without touching the proto
 is retired once the port is proven. The client moves separately into
 `frontend-app-extension`.
 
+**[docs/CONTEXT.md](docs/CONTEXT.md)** maps the systems around this one — Tutor,
+edx-platform, the Django plugin and the MFE — if any of them is unfamiliar.
+
 Read **[docs/BUILD-PLAN.md](docs/BUILD-PLAN.md)** before working on this — it has the
 three tracks, the thirteen details that must survive the rewrite, and the open decisions.
 **[docs/PLAN.md](docs/PLAN.md)** has the original design; where the two disagree the build
 plan is current, and it says where and why.
 
-Done so far: the service stands up and answers `/api/health`. Rooms, texts and the socket
-events are next.
+Done so far: **Track A steps 1–3**. Texts, rooms, the library proxy and all five live
+messages, passing **19/19** on the acceptance smoke test against Tutor's MySQL and the
+live library, with delivery measured at 35ms. 58 unit tests besides.
+
+Next: two browsers by hand, then the Tutor plugin.
 
 ## Scope
 
@@ -58,6 +64,22 @@ Tests:
 ```bash
 pytest
 ```
+
+Against a real library and a real MySQL, by hand — neither is a pytest, because CI has
+no Tutor stack and a test needing a secret is a test nobody runs:
+
+```bash
+LIBRARY_BASE_URL=… LIBRARY_APP_NAME=… LIBRARY_API_KEY=… python scripts/check_library.py "སྤྱོད་འཇུག"
+```
+
+```bash
+docker run --rm --network tutor_dev_default -v "$PWD/src:/app/src:ro" -v "$PWD/scripts:/app/scripts:ro" -e DATABASE_URL=mysql://classroom:…@mysql:3306/classroom -e LIBRARY_BASE_URL=… -e LIBRARY_APP_NAME=… -e LIBRARY_API_KEY=… wb-classroom-sync:dev python scripts/check_register.py "སྤྱོད་འཇུག"
+```
+
+Tutor's MySQL does not publish 3306, so that second one runs inside the network — which
+is how the service runs anyway. **`tutor dev` is the local setup here and `tutor local`
+is the server**; do not start the local stack on a development machine, as Tutor stops
+the dev containers to do it.
 
 ## How it reaches Open edX
 

@@ -127,3 +127,8 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# Node. The only JavaScript here is tests/smoke.mjs, which is deliberately not
+# rewritten in Python — see docs/socket-contract.md. Its one dependency is declared
+# in package.json; the installed tree is not committed.
+node_modules/

@@ -35,23 +35,66 @@ jobs:
   # the whole point of keeping it. Do not rewrite it in Python: a rewritten test
   # no longer proves the behaviour is the same.
   #
-  # Unskip once the server answers. See docs/BUILD-PLAN.md, Track A.
+  # Only the setup preamble differs from the original: there is no local import
+  # step any more, so it finds a text in the library instead. All 19 assertions are
+  # byte-identical.
+  #
+  # It needs the library, so it runs only where the credentials exist — not on a
+  # fork's pull request. `19/19` is the bar.
   smoke:
     runs-on: ubuntu-latest
-    if: false
+    if: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
+
+    services:
+      mysql:
+        image: mysql:8.4.0
+        env:
+          MYSQL_ROOT_PASSWORD: ci
+          MYSQL_DATABASE: classroom
+        ports: ["3306:3306"]
+        # The same case-insensitive server default Tutor runs, so the schema's
+        # utf8mb4_bin columns are exercised rather than accidentally agreeing.
+        options: >-
+          --health-cmd="mysqladmin ping -uroot -pci"
+          --health-interval=5s --health-timeout=5s --health-retries=20
+          --collation-server=utf8mb4_unicode_ci --character-set-server=utf8mb4
 
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      - name: Install the socket client
-        run: npm install socket.io-client
+      - name: Install
+        run: |
+          pip install -U pip
+          pip install .
+          npm ci
+
+      - name: Create the schema
+        run: mysql -h 127.0.0.1 -uroot -pci classroom < migrations/001_init.sql
 
       - name: Start the server
-        run: echo "TODO: start the service, then run the smoke test against it"
+        env:
+          DATABASE_URL: mysql://root:ci@127.0.0.1:3306/classroom
+          LIBRARY_BASE_URL: ${{ secrets.LIBRARY_BASE_URL }}
+          LIBRARY_APP_NAME: ${{ secrets.LIBRARY_APP_NAME }}
+          LIBRARY_API_KEY: ${{ secrets.LIBRARY_API_KEY }}
+          HOST_PASSWORD: ci-host-password
+        run: |
+          uvicorn classroom_sync.app:app --host 127.0.0.1 --port 8000 &
+          for _ in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8000/api/health && break
+            sleep 1
+          done
 
       - name: Smoke test
-        run: API_URL=http://localhost:8000 node tests/smoke.mjs
+        env:
+          API_URL: http://127.0.0.1:8000
+          HOST_PASSWORD: ci-host-password
+        run: node tests/smoke.mjs
