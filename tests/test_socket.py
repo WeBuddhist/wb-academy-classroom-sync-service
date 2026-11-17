@@ -146,7 +146,7 @@ class Client:
         self.sio.on("connect_error", self._refused)
         for name in (
             "teach:goto", "presence", "session:ended", "session:started", "auth:expired", "room:closed",
-            "member:removed",
+            "member:removed", "member:left",
         ):
             self.sio.on(name, self._remember(name))
 

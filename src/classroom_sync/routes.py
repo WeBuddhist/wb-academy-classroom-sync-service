@@ -340,7 +340,7 @@ async def post_leave(request: Request, code: str, user: User = Depends(current_u
         raise HTTPException(status_code=404, detail="You are not in this class")
     live = getattr(request.app.state, "live", None)
     if live is not None:
-        await live.kick(room, user.id)
+        await live.kick(room, user.id, "member:left")
 
 
 @router.post("/rooms/{code}/change-code", response_model=ChangeCodeResponse)

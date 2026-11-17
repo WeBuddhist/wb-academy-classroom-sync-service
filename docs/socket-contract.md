@@ -55,6 +55,7 @@ whether you are the teacher, come from the login and nothing the client says.
 | `session:ended` | server → client | *(none)* |
 | `session:started` | server → client | *(none)* |
 | `auth:expired` | server → client | *(none)* |
+| `member:left` | server → client | `code` |
 | `room:closed` | server → client | *(none)* |
 | `member:removed` | server → client | `code` |
 
@@ -87,6 +88,8 @@ Every client→server message is acknowledged with `{ ok: true, ... }` or
   login is checked once, at connect). The client calls `/api/me` to refresh its cookie and
   reconnects.
 - `room:closed` means the class was **archived** (over HTTP). It is gone from everyone's list.
+- `member:left` is sent to a student's own tabs when they leave the class (the class stays in
+  their list). It is separate from `member:removed` so they are never told a teacher removed them.
 - `member:removed` is sent to a member the teacher removed, on every tab they have open, and
   they are dropped from the live class.
 

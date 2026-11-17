@@ -48,8 +48,8 @@ def app(monkeypatch):
     api.state.calls = []
 
     class FakeLive:
-        async def kick(self, room, user_id):
-            api.state.calls.append(("kick", user_id))
+        async def kick(self, room, user_id, event="member:removed"):
+            api.state.calls.append(("kick", user_id, event))
 
         async def announce_closed(self, room):
             api.state.calls.append(("announce_closed", room.id))
@@ -204,7 +204,7 @@ def test_the_teacher_can_remove_a_student():
     response = client.delete("/api/rooms/ABC234/members/student-1", headers=auth(TEACHER))
     assert response.status_code == 204
     assert did("remove_member") == [("remove_member", "student-1")]
-    assert did("kick") == [("kick", "student-1")], "a removed member must be dropped from the live class"
+    assert did("kick") == [("kick", "student-1", "member:removed")], "a removed member must be dropped from the live class"
 
 
 def test_the_teacher_cannot_remove_themselves():
@@ -223,7 +223,7 @@ def test_a_student_can_leave_the_class():
     # They step out, keeping their place: nothing is deleted, so no code is needed to return.
     assert did("leave_member") == [("leave_member", "student-1")]
     assert not did("remove_member")
-    assert did("kick") == [("kick", "student-1")], "leaving must drop them from the live class too"
+    assert did("kick") == [("kick", "student-1", "member:left")], "leaving drops them from the live class, saying they left"
 
 
 def test_the_teacher_cannot_leave_their_own_class():

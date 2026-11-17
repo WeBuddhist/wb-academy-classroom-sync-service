@@ -103,8 +103,13 @@ class Live:
         self._sio = sio
         self._present = present
 
-    async def kick(self, room, user_id: str) -> None:
-        """Drop a removed member from the live class, on every tab they have open."""
+    async def kick(self, room, user_id: str, event: str = "member:removed") -> None:
+        """Drop a member from the live class, on every tab they have open.
+
+        `event` says why: `member:removed` when a teacher took them out, `member:left` when
+        they stepped out themselves. The two read differently to the person, and a student
+        who just pressed Leave must not be told a teacher removed them.
+        """
         name = socket_room(room.id)
         try:
             sids = [sid for sid, _ in self._sio.manager.get_participants("/", _user_room(user_id))]
@@ -112,7 +117,7 @@ class Live:
             sids = []
         for sid in sids:
             await self._sio.leave_room(sid, name)
-            await self._sio.emit("member:removed", {"code": room.code}, to=sid)
+            await self._sio.emit(event, {"code": room.code}, to=sid)
         await self._present(room)
 
     async def announce_closed(self, room) -> None:
