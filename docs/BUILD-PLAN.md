@@ -898,6 +898,11 @@ the request:
 | `POST /api/rooms/{code}/leave` | member (student) | the student steps out: stamps `room_members.left_at` (migration 008); the class stays in their list and `POST .../join` rejoins it with no typing; notes kept; the teacher cannot leave |
 | `PUT /api/rooms/{code}/dates` | teacher | the first and last day the class is held (`startsOn`, `endsOn`, either may be null); shown, never closes the class (migration 009). Also accepted, optionally, when creating a class |
 
+The library proxy keeps successful answers in memory for `LIBRARY_CACHE_SECONDS` (default 600; 0
+turns it off) and shares one in-flight request between everyone asking for the same thing, so a
+class of 50 opening the same text costs the library one request, not fifty. Bounded (16 MB an
+entry, 96 MB in all, least recently used out first); errors are never kept.
+
 Also, since the review: the library proxy (`/library/...`) and `GET /api/texts` need a login;
 `GET /api/rooms/{code}` and `POST .../join` need one too and are rate-limited per account
 (30 attempts a minute, `ratelimit.py`) because a class code is what lets someone in; a note's

@@ -51,7 +51,7 @@ whether you are the teacher, come from the login and nothing the client says.
 | `teach:goto` | client → server | `segmentId` |
 | `session:end` | client → server | *(none)* |
 | `teach:goto` | server → client | `segmentId` |
-| `presence` | server → client | `count`, `teacherHere` |
+| `presence` | server → client | `count?`, `teacherHere` |
 | `session:ended` | server → client | *(none)* |
 | `session:started` | server → client | *(none)* |
 | `auth:expired` | server → client | *(none)* |
@@ -74,8 +74,10 @@ Every client→server message is acknowledged with `{ ok: true, ... }` or
 
 **What the server sends**
 
-- `presence` counts **people, not tabs**, and says whether the teacher is connected, so a
-  student who arrives early sees "waiting for the teacher" and can read ahead.
+- `presence` counts **people, not tabs**. The **teacher** gets `{count, teacherHere}` on every
+  change. A **student** gets `{teacherHere}` only, and only when it changes: they are not shown a
+  count, and sending every arrival to everyone is students-squared messages. A student who
+  arrives early sees "waiting for the teacher" and can read ahead.
 - `session:ended` is *today's* session ending. The class stays: everyone is still a member
   and the position is kept. The **teacher's** client returns to their list; a **student's** stays
   in the class to read and keep notes, and is told the session is over. It is stored on the
@@ -177,7 +179,7 @@ interface ClientToServerEvents {
 
 interface ServerToClientEvents {
   'teach:goto': (payload: { segmentId: string }) => void
-  presence: (payload: { count: number; teacherHere: boolean }) => void
+  presence: (payload: { count?: number; teacherHere: boolean }) => void
   'session:ended': () => void
   'session:started': () => void
   'auth:expired': () => void

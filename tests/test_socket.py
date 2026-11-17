@@ -101,6 +101,7 @@ def world(monkeypatch) -> World:
 
     monkeypatch.setattr(events, "set_current_segment", set_current_segment)
     monkeypatch.setattr(events, "set_session_ended", set_session_ended)
+    api.state.live.told_teacher_here.clear()
     return w
 
 
@@ -381,11 +382,31 @@ async def test_the_class_knows_whether_the_teacher_is_here(clients, world):
     teacher = await clients(TEACHER)
     await teacher.join()
     assert await student.heard_within("presence", count=2)
-    assert student.heard["presence"][-1] == {"count": 2, "teacherHere": True}
+    # A student is told only whether the teacher is here, never a head-count.
+    assert student.heard["presence"][-1] == {"teacherHere": True}
 
     await teacher.disconnect()
     assert await student.heard_within("presence", count=3)
-    assert student.heard["presence"][-1] == {"count": 1, "teacherHere": False}
+    assert student.heard["presence"][-1] == {"teacherHere": False}
+
+
+@pytest.mark.asyncio
+async def test_the_teacher_is_told_the_count_and_students_are_not_told_about_each_other(clients, world):
+    teacher, early = await clients(TEACHER), await clients(STUDENT)
+    await teacher.join()
+    await early.join()
+    assert await teacher.heard_within("presence", count=2)
+    assert teacher.heard["presence"][-1] == {"count": 2, "teacherHere": True}
+    heard_before = len(early.heard.get("presence", []))
+
+    # More students arrive: the teacher's number goes up; the student hears nothing.
+    for who in (STUDENT2, {"sub": "student-3", "preferred_username": "x", "name": "X"}):
+        world.members.add(who["sub"])
+        await (await clients(who)).join()
+    assert await teacher.heard_within("presence", count=4)
+    assert teacher.heard["presence"][-1] == {"count": 4, "teacherHere": True}
+    await asyncio.sleep(0.2)
+    assert len(early.heard.get("presence", [])) == heard_before
 
 
 # -- ending a session -----------------------------------------------------------------

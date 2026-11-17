@@ -99,9 +99,13 @@ class Live:
     Returned by `attach`. Routes reach it through `app.state.live`.
     """
 
-    def __init__(self, sio: socketio.AsyncServer, present) -> None:
+    def __init__(
+        self, sio: socketio.AsyncServer, present, told_teacher_here: dict[str, bool]
+    ) -> None:
         self._sio = sio
         self._present = present
+        #: What students were last told about the teacher, by class. Public so a test can start clean.
+        self.told_teacher_here = told_teacher_here
 
     async def kick(self, room, user_id: str, event: str = "member:removed") -> None:
         """Drop a member from the live class, on every tab they have open.
@@ -122,6 +126,7 @@ class Live:
 
     async def announce_closed(self, room) -> None:
         """Tell everyone in the class it has been archived."""
+        self.told_teacher_here.pop(room.id, None)
         await self._sio.emit("room:closed", room=socket_room(room.id))
 
 
@@ -173,13 +178,39 @@ def attach(sio: socketio.AsyncServer, get_pool, get_authenticator, web_origins) 
             return set()
         return {users[sid].id for sid, _ in members if sid != excluding and sid in users}
 
+    #: Whether the teacher was here the last time students were told, by class. Students are told
+    #: only when it changes.
+    told_teacher_here: dict[str, bool] = {}
+
     async def broadcast_presence(room, *, excluding: str | None = None) -> None:
+        """Say who is here, to those who need to know.
+
+        The **teacher** is told the head-count and whether they themselves are counted, on every
+        change: it is the number on their screen. **Students** are not shown a count, so they are
+        told one thing only, whether the teacher is here, and only when that changes. Sending
+        every arrival to everyone is students-squared messages (a hundred joining at the start is
+        ten thousand), none of which any student could see.
+        """
         here = present_users(room.id, excluding=excluding)
-        await sio.emit(
-            "presence",
-            {"count": len(here), "teacherHere": room.host_user_id in here},
-            room=socket_room(room.id),
-        )
+        teacher_here = room.host_user_id in here
+        try:
+            members = sio.manager.get_participants("/", socket_room(room.id))
+        except KeyError:
+            members = []
+        teacher_sids = [
+            sid for sid, _ in members
+            if sid != excluding and sid in users and users[sid].id == room.host_user_id
+        ]
+        for sid in teacher_sids:
+            await sio.emit("presence", {"count": len(here), "teacherHere": teacher_here}, to=sid)
+        if told_teacher_here.get(room.id) != teacher_here:
+            told_teacher_here[room.id] = teacher_here
+            await sio.emit(
+                "presence",
+                {"teacherHere": teacher_here},
+                room=socket_room(room.id),
+                skip_sid=teacher_sids or None,
+            )
 
     @sio.event
     async def connect(sid, environ, auth=None):
@@ -350,4 +381,4 @@ def attach(sio: socketio.AsyncServer, get_pool, get_authenticator, web_origins) 
         finally:
             users.pop(sid, None)
 
-    return Live(sio, broadcast_presence)
+    return Live(sio, broadcast_presence, told_teacher_here)

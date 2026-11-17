@@ -41,6 +41,10 @@ class Config:
     library_base_url: str = os.environ.get("LIBRARY_BASE_URL", "")
     library_app_name: str = os.environ.get("LIBRARY_APP_NAME", "")
     library_api_key: str = os.environ.get("LIBRARY_API_KEY", "")
+    #: How long a library response is kept and shared, in seconds. A class loads the same text,
+    #: segments and alignments for every student at once; kept for a few minutes they cost the
+    #: library one request instead of fifty. 0 turns it off.
+    library_cache_seconds: float = float(os.environ.get("LIBRARY_CACHE_SECONDS", "600"))
 
     #: How the Academy login is checked. All three are public values: the public half of
     #: the platform's signing key, and the issuer and audience its tokens carry. Without
