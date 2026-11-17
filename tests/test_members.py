@@ -81,6 +81,9 @@ def app(monkeypatch):
         await record(("leave_member", user_id))
         return user_id == "student-1"
 
+    async def set_class_dates(pool, room_id, starts_on, ends_on):
+        await record(("set_class_dates", starts_on, ends_on))
+
     async def change_code(pool, room):
         await record(("change_code", room.id))
         return "NEW234"
@@ -96,6 +99,7 @@ def app(monkeypatch):
     monkeypatch.setattr(routes, "list_members", list_members)
     monkeypatch.setattr(routes, "remove_member", remove_member)
     monkeypatch.setattr(routes, "leave_member", leave_member)
+    monkeypatch.setattr(routes, "set_class_dates", set_class_dates)
     monkeypatch.setattr(routes, "change_code", change_code)
     monkeypatch.setattr(routes, "close_room", close_room)
     monkeypatch.setattr(routes, "classes_for", classes_for)
@@ -123,6 +127,7 @@ NEEDS_LOGIN = [
     ("post", "/api/rooms/ABC234/change-code"),
     ("post", "/api/rooms/ABC234/archive"),
     ("post", "/api/rooms/ABC234/leave"),
+    ("put", "/api/rooms/ABC234/dates"),
 ]
 
 
@@ -265,7 +270,8 @@ def test_my_classes_is_asked_for_the_logged_in_account_only():
     assert response.status_code == 200
     assert response.json()[0] == {
         "code": "ABC234", "name": "Tuesday study", "title": "A Text", "role": "student",
-        "memberCount": 12, "lastSeenAt": "2026-01-02T00:00:00", "left": False,
+        "memberCount": 12, "lastSeenAt": "2026-01-02T00:00:00",
+        "startsOn": None, "endsOn": None, "left": False,
     }
     # The account comes from the verified token, never from the request.
     assert did("classes_for") == [("classes_for", "student-1")]
@@ -281,3 +287,33 @@ def test_guessing_codes_too_fast_is_slowed_down():
     # Per account: someone else is not held up by it.
     assert client.post("/api/rooms/ZZ9999/join", headers=auth(OUTSIDER)).status_code == 404
     code_attempts.reset()
+
+
+def test_the_teacher_can_set_when_the_class_is_held():
+    response = client.put(
+        "/api/rooms/ABC234/dates", headers=auth(TEACHER),
+        json={"startsOn": "2026-03-12", "endsOn": "2026-04-30"},
+    )
+    assert response.status_code == 204
+    (call,) = did("set_class_dates")
+    assert (str(call[1]), str(call[2])) == ("2026-03-12", "2026-04-30")
+
+
+def test_either_date_can_be_set_alone_or_cleared():
+    assert client.put("/api/rooms/ABC234/dates", headers=auth(TEACHER), json={"endsOn": "2026-04-30"}).status_code == 204
+    assert client.put("/api/rooms/ABC234/dates", headers=auth(TEACHER), json={}).status_code == 204
+
+
+def test_a_class_cannot_end_before_it_starts():
+    response = client.put(
+        "/api/rooms/ABC234/dates", headers=auth(TEACHER),
+        json={"startsOn": "2026-04-30", "endsOn": "2026-03-12"},
+    )
+    assert response.status_code == 422
+    assert not did("set_class_dates")
+
+
+def test_a_student_cannot_set_the_dates():
+    response = client.put("/api/rooms/ABC234/dates", headers=auth(STUDENT), json={"endsOn": "2026-04-30"})
+    assert response.status_code == 403
+    assert not did("set_class_dates")

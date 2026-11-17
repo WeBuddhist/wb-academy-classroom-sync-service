@@ -10,6 +10,7 @@ import hmac
 import secrets
 import uuid
 from dataclasses import dataclass
+from datetime import date
 
 import aiomysql
 
@@ -60,6 +61,9 @@ class Room:
     host_user_id: str | None = None
     #: The teacher ended today's session and has not come back (see `set_session_ended`).
     session_ended: bool = False
+    #: The first and last day the class is held, when the teacher has said.
+    starts_on: date | None = None
+    ends_on: date | None = None
 
 
 def new_room_code() -> str:
@@ -84,6 +88,8 @@ async def create_room(
     *,
     host: User | None = None,
     name: str | None = None,
+    starts_on: date | None = None,
+    ends_on: date | None = None,
 ) -> CreatedRoom:
     """Open a room on an already-registered text.
 
@@ -101,13 +107,15 @@ async def create_room(
                     await cur.execute(
                         """
                         insert into rooms
-                               (id, code, segmentation_id, name, host_user_id)
-                        values (%s, %s, %s, %s, %s)
+                               (id, code, segmentation_id, name, host_user_id,
+                                starts_on, ends_on)
+                        values (%s, %s, %s, %s, %s, %s, %s)
                         """,
                         (
                             room_id, code, segmentation_id,
                             (name or "").strip() or None,
                             host.id if host else None,
+                            starts_on, ends_on,
                         ),
                     )
                     if host:
@@ -145,7 +153,7 @@ async def create_room(
 _ROOM_SELECT = """
     select r.id, r.code, r.segmentation_id, s.edition_id, s.title,
            r.current_segment_id, r.is_live, t.edition_id,
-           r.name, r.host_user_id, r.session_ended
+           r.name, r.host_user_id, r.session_ended, r.starts_on, r.ends_on
       from rooms r
       join segmentations s on s.id = r.segmentation_id
       left join room_translations t on t.room_id = r.id
@@ -205,6 +213,24 @@ async def set_current_segment(
                 )
             await conn.commit()
             return True
+        except Exception:
+            await conn.rollback()
+            raise
+
+
+async def set_class_dates(
+    pool: aiomysql.Pool, room_id: str, starts_on: date | None, ends_on: date | None
+) -> None:
+    """Set (or, with None, clear) the days the class is held."""
+    async with pool.acquire() as conn:
+        await conn.begin()
+        try:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "update rooms set starts_on = %s, ends_on = %s where id = %s",
+                    (starts_on, ends_on, room_id),
+                )
+            await conn.commit()
         except Exception:
             await conn.rollback()
             raise
@@ -286,6 +312,9 @@ class ClassSummary:
     role: str
     member_count: int
     last_seen_at: object
+    #: The days the class is held, when set.
+    starts_on: date | None = None
+    ends_on: date | None = None
     #: The student left this class but it stays in their list, to rejoin.
     left: bool = False
 
@@ -442,6 +471,8 @@ async def classes_for(pool: aiomysql.Pool, user_id: str) -> list[ClassSummary]:
                    (select count(*) from room_members c
                      where c.room_id = r.id and c.left_at is null),
                    m.last_seen_at,
+                   r.starts_on,
+                   r.ends_on,
                    m.left_at is not null
               from room_members m
               join rooms r on r.id = m.room_id

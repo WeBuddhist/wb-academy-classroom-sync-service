@@ -896,6 +896,7 @@ the request:
 | `GET /api/rooms/{code}/members` | teacher | member list, teacher first |
 | `DELETE /api/rooms/{code}/members/{id}` | teacher | removes a student; the teacher cannot be removed |
 | `POST /api/rooms/{code}/leave` | member (student) | the student steps out: stamps `room_members.left_at` (migration 008); the class stays in their list and `POST .../join` rejoins it with no typing; notes kept; the teacher cannot leave |
+| `PUT /api/rooms/{code}/dates` | teacher | the first and last day the class is held (`startsOn`, `endsOn`, either may be null); shown, never closes the class (migration 009). Also accepted, optionally, when creating a class |
 
 Also, since the review: the library proxy (`/library/...`) and `GET /api/texts` need a login;
 `GET /api/rooms/{code}` and `POST .../join` need one too and are rate-limited per account

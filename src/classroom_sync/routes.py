@@ -8,6 +8,7 @@ Field names are **camelCase on the wire**, matching the client. The temptation t
 docs/socket-contract.md.
 """
 
+from datetime import date
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -31,6 +32,7 @@ from .rooms import (
     list_members,
     password_matches,
     remove_member,
+    set_class_dates,
 )
 
 router = APIRouter(prefix="/api")
@@ -51,6 +53,15 @@ class CreateRoomRequest(BaseModel):
     textId: str = Field(min_length=1)
     #: What the class is called in a student's list. Defaults to the text's title.
     name: str | None = Field(default=None, max_length=255)
+    #: The first and last day the class is held. Both optional.
+    startsOn: date | None = None
+    endsOn: date | None = None
+
+    @model_validator(mode="after")
+    def _dates_in_order(self):
+        if self.startsOn and self.endsOn and self.endsOn < self.startsOn:
+            raise ValueError("The class cannot end before it starts")
+        return self
 
 
 class CreateRoomResponse(BaseModel):
@@ -74,6 +85,8 @@ class RoomResponse(BaseModel):
     isLive: bool
     translationEditionId: str | None = None
     name: str | None = None
+    startsOn: str | None = None
+    endsOn: str | None = None
 
 
 @router.get("/texts", response_model=list[TextResult])
@@ -151,6 +164,8 @@ async def post_room(
             translation_edition_id,
             host=user,
             name=body.name,
+            starts_on=body.startsOn,
+            ends_on=body.endsOn,
         )
     except RoomError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
@@ -182,6 +197,8 @@ async def get_room_route(
         isLive=room.is_live,
         translationEditionId=room.translation_edition_id,
         name=room.name,
+        startsOn=_iso(room.starts_on),
+        endsOn=_iso(room.ends_on),
     )
 
 
@@ -197,6 +214,8 @@ class ClassResponse(BaseModel):
     role: str
     memberCount: int
     lastSeenAt: str | None
+    startsOn: str | None = None
+    endsOn: str | None = None
     #: The student left this class; it stays in their list and they can rejoin without the code.
     left: bool = False
 
@@ -267,7 +286,8 @@ async def my_classes(request: Request, user: User = Depends(current_user)):
     return [
         ClassResponse(
             code=c.code, name=c.name, title=c.title, role=c.role,
-            memberCount=c.member_count, lastSeenAt=_iso(c.last_seen_at), left=c.left,
+            memberCount=c.member_count, lastSeenAt=_iso(c.last_seen_at),
+            startsOn=_iso(c.starts_on), endsOn=_iso(c.ends_on), left=c.left,
         )
         for c in classes
     ]
@@ -295,6 +315,8 @@ async def join_room(
         isLive=room.is_live,
         translationEditionId=room.translation_edition_id,
         name=room.name,
+        startsOn=_iso(room.starts_on),
+        endsOn=_iso(room.ends_on),
         role=role,
     )
 
@@ -356,6 +378,31 @@ async def post_change_code(
     except RoomError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     return ChangeCodeResponse(code=new_code)
+
+
+class DatesIn(BaseModel):
+    """The days the class is held. `null` clears one (or both)."""
+
+    startsOn: date | None = None
+    endsOn: date | None = None
+
+    @model_validator(mode="after")
+    def _in_order(self):
+        if self.startsOn and self.endsOn and self.endsOn < self.startsOn:
+            raise ValueError("The class cannot end before it starts")
+        return self
+
+
+@router.put("/rooms/{code}/dates", status_code=204)
+async def put_dates(
+    request: Request, code: str, body: DatesIn, user: User = Depends(current_user)
+):
+    """Say when the class is held (the teacher's). Shown to everyone in it; it never closes
+    the class by itself."""
+    room = await _host_room(request, code, user)
+    if not room.is_live:
+        raise HTTPException(status_code=410, detail="That class has been archived")
+    await set_class_dates(request.app.state.database.pool, room.id, body.startsOn, body.endsOn)
 
 
 @router.post("/rooms/{code}/archive", status_code=204)
