@@ -13,6 +13,7 @@ because both sides must land on the same segmentation for the same text or a roo
 mean nothing to the reader showing them.
 """
 
+import asyncio
 from dataclasses import dataclass
 
 import httpx
@@ -76,11 +77,16 @@ class LibraryClient:
             timeout=timeout,
             headers={
                 "accept": "application/json",
-                # The two headers the library requires. They are attached here,
-                # server-side, and never reach a browser — which is the reason the
-                # reader's library calls are proxied through this service at all.
-                "X-Application": app_name,
+                # The key, attached here, server-side, and never reaching a browser —
+                # which is the reason the reader's library calls are proxied through
+                # this service at all.
                 "X-API-Key": api_key,
+                # The application name is sent only when one is set. Each library
+                # deployment keeps its own list of applications: our name is registered
+                # on the staging library but not on production, where sending it is
+                # refused with 401 "API key not authorized for this application" while
+                # the same key without the header is accepted. Checked against both.
+                **({"X-Application": app_name} if app_name else {}),
             },
         )
 
@@ -196,6 +202,75 @@ class LibraryClient:
             text_id=segmentation.get("text_id") or text_or_edition_id,
             segmentation_id=segmentation["id"],
         )
+
+    async def resolve_translation(
+        self, text_id: str, source_edition_id: str
+    ) -> str | None:
+        """The edition of the text's first translation that lines up with the source.
+
+        Returns None when there is nothing to show beneath the source, which is an
+        ordinary outcome: many texts have no translation, and some translations are
+        not aligned to this edition. A class then shows the source alone.
+
+        "First" follows the order the library lists `translations` in, and the first
+        edition of each, matching the rule used for the source. A translation with no
+        alignment to this edition is skipped rather than chosen, since choosing it
+        would put an empty column on every student's screen.
+
+        Only alignment *existence* is checked here, in either direction (the reader
+        accepts both). The pairs themselves are read by the browser, so this service
+        still handles ids and nothing else.
+        """
+        text = await self._get(f"/v2/texts/{text_id}")
+        translation_ids = (text or {}).get("translations") or []
+
+        async def first_edition(translation_id: str) -> str | None:
+            try:
+                editions = await self._get(
+                    f"/v2/texts/{translation_id}/editions",
+                    {"edition_type": EDITION_TYPE},
+                )
+            except LibraryError as error:
+                if error.is_not_found:
+                    return None
+                raise
+            return editions[0]["id"] if editions else None
+
+        # Every translation's edition, and then every alignment check, at once: these are
+        # independent requests, and this runs inside the request that creates a class, which
+        # was waiting on them one after another. The answer is still the first aligned one in
+        # the library's own order, since the results keep that order.
+        edition_ids = [
+            edition_id
+            for edition_id in await asyncio.gather(*(first_edition(t) for t in translation_ids))
+            if edition_id
+        ]
+        # A check that fails counts as "not aligned" rather than sinking the rest: a later
+        # translation's error must not undo an earlier one that did line up, which is what
+        # checking them in order used to guarantee by never reaching the later one.
+        aligned = await asyncio.gather(
+            *(self._aligned(source_edition_id, edition_id) for edition_id in edition_ids),
+            return_exceptions=True,
+        )
+        return next((e for e, ok in zip(edition_ids, aligned) if ok is True), None)
+
+    async def _aligned(self, source_edition_id: str, other_edition_id: str) -> bool:
+        """Whether any alignment pair exists between two editions, either way round."""
+
+        # One direction after the other, and the second only if the first found nothing: the
+        # library may answer an error for the direction it does not store, which must not
+        # count against an alignment the first one already showed.
+        for first, second in (
+            (source_edition_id, other_edition_id),
+            (other_edition_id, source_edition_id),
+        ):
+            page = await self._get(
+                f"/v2/editions/{first}/alignments/{second}",
+                {"limit": 1, "offset": 0},
+            )
+            if (page or {}).get("items"):
+                return True
+        return False
 
     async def segment_ids(self, edition_id: str) -> list[str]:
         """Every segment id of an edition's segmentation, in reading order.

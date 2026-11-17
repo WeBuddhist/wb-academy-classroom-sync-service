@@ -42,11 +42,23 @@ class Config:
     library_app_name: str = os.environ.get("LIBRARY_APP_NAME", "")
     library_api_key: str = os.environ.get("LIBRARY_API_KEY", "")
 
+    #: How the Academy login is checked. All three are public values: the public half of
+    #: the platform's signing key, and the issuer and audience its tokens carry. Without
+    #: them login is "not configured" and every route that needs a user answers 503.
+    jwt_public_jwk_set: str = os.environ.get("JWT_PUBLIC_JWK_SET", "")
+    jwt_issuer: str = os.environ.get("JWT_ISSUER", "")
+    jwt_audience: str = os.environ.get("JWT_AUDIENCE", "")
+
 
 config = Config()
 
 
 def warn_on_insecure_defaults(log) -> None:
+    if not (config.jwt_public_jwk_set and config.jwt_issuer and config.jwt_audience):
+        log(
+            "JWT_PUBLIC_JWK_SET, JWT_ISSUER or JWT_AUDIENCE is not set, so the Academy "
+            "login cannot be checked. Routes that need a user will answer 503."
+        )
     if not config.library_base_url:
         log(
             "LIBRARY_BASE_URL is not set. Registering a text needs the library, so "

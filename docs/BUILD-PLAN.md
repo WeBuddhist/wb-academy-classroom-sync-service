@@ -352,7 +352,7 @@ the pipeline re-segments, which is not something to discover during a lesson; a 
 re-sync belongs in its own operation, run when no room is live.
 
 **The room routes are done too** — `rooms.py`, `routes.py`, 25 unit tests, and
-`scripts/check_rooms.py` passing **15/15** against a server running on Tutor's MySQL and
+`scripts/check_rooms.py` (since replaced by the account-based `tests/smoke.mjs`) passing **15/15** against a server running on Tutor's MySQL and
 the live library:
 
 ```
@@ -773,9 +773,294 @@ student's line is prose and calling it a button would be a lie.
 
 *Done:* a class can follow along. 23 tests pass across the MFE's own suites.
 
-### Step 5 — Stacked translations
-Tibetan above, English below, per segment, where an alignment exists. Hide the lower line
-when there is none.
+### Step 5 — Stacked translations ✅
+Tibetan above, English below, per segment, where an alignment exists. The line beneath is
+simply absent where there is none.
+
+How it works, decided with the teacher in mind (they pick the Tibetan text and nothing
+else):
+
+- **The server pins the translation when the room is created**, the way it pins the
+  source edition, and for the same reason: the library does not promise that "the first
+  translation" stays the same one for the life of a class. `LibraryClient.resolve_translation`
+  takes the first of the text's `translations` whose first critical edition has an
+  alignment to the source, in either direction, and skips any that do not. Stored in
+  `room_translations` (migration 002 — a table, not a column, because MySQL has no
+  `add column if not exists` and every migration re-runs on `init`).
+- **No translation is not an error.** Many texts have none; the room then shows the
+  source alone, and a failed lookup at creation does the same rather than refusing to
+  teach.
+- **The browser reads the pairs.** `text.ts` `loadTranslations` fetches every alignment
+  page, forward first then reversed (the library stores a pair in one direction only),
+  loads the translation edition's text, and builds `source segment id -> English`. The
+  server still handles ids and nothing else, and only a source segment id travels over
+  the socket. The allowlist already contained the alignments path.
+- **A translation that fails to load does not take the class down.** `useText` falls
+  back to the source alone.
+- **Deliberately not ported:** WeBuddhist's walk through a shared ancestor text for
+  editions with no direct alignment. The server only pins a directly aligned translation,
+  so the case cannot arise. If a class ever wants such a pair, that is the place to add it.
+- **Not built:** a way for the teacher to choose between several translations. Today it is
+  always the first aligned one.
+
+Verified live against the real library through the proxy: the Bodhicaryavatara and its
+first translation line up, every mapped key is a real source segment id
+(`translations.live.test.ts`). The Bodhicaryavatara's alignment is stored
+translation-to-source, which is exactly the case the reverse fallback exists for.
+
+### Step 5b — Reading options and table of contents ✅
+A header menu of personal reading preferences, **none of them synced** (the segment id
+names the same line however it is displayed): show Source / Translation / both, Prose or
+Segmented layout, and Table of Contents Show/Hide. Remembered per browser.
+
+The table of contents is two things, both from `GET /v2/editions/{id}/table-of-contents`
+(already in the proxy allowlist): section titles drawn into the text where each begins,
+and a **Contents** menu to jump to one. A teacher's jump also moves the class there (a
+1,000-line text cannot be taught by scrolling); a student's jump only moves their own
+view, so looking ahead drags no one.
+
+- The library gives a section as a character span; the class moves by segment id.
+  `outline.ts` bridges them using WeBuddhist's rule (commit 80ed57cd): a segment that
+  began before the span but runs into it counts, and an **empty span means a position,
+  not a range**, so it anchors to the first segment at or after it.
+- Most of the library has no outline. Such a text shows no contents menu and costs no
+  segment scan, and a failed read is treated the same, so the contents can never stop a
+  class from starting.
+- Checked live: the Bodhicaryavatara's chapters all land on real segments, in reading
+  order (`translations.live.test.ts`).
+
+## Standing classes (accounts, members, months-long rooms)
+
+**Decided with the product owner.** A class runs for months in one room, with the same
+students. Settled:
+
+- **One text per class.** No "change text" yet; saved positions are tied to one text.
+- **Members, with a member list.** The teacher can see who is in the class, remove a
+  member, and change the class code (a code that stays valid for months is a weak secret).
+- **No co-teachers.** The account that created the class is its teacher.
+- **Login is required** to join or teach. A person that cannot be identified cannot be
+  remembered. The shared host password stays, and only *creates* a class.
+- **"End class" splits in two.** *End session* (routine; the room and everyone's
+  membership stay, and the position is saved) and *Archive class* (rare; the course is
+  over).
+
+### The login check ✅ (step 1)
+`src/classroom_sync/auth.py`. Open edX keeps a signed JWT for each logged-in browser in
+two cookies (`edx-jwt-cookie-header-payload`, and `edx-jwt-cookie-signature`, which is
+HttpOnly so a script can never read it). The service joins them and verifies the
+signature against the platform's **public** key. It never calls the LMS and holds nothing
+secret.
+
+Things found by checking a token the real LMS issued, not by assuming:
+
+- **Cookie tokens are RS512 and carry no `kid`.** A check pinned to RS256 with a required
+  `kid` refused every real login. Algorithms are now pinned to RS512 and RS256 (never
+  HMAC or `none`); a token naming an unknown `kid` is refused; a keyless token is tried
+  only against the platform's own key.
+- **`sub` is the identity**, not the username: opaque and unchanging. The username and
+  name only travel along to be shown in a member list.
+- **Cookies are only a credential when the request opts in** with `USE-JWT-COOKIE: true`,
+  the header Open edX's own frontend library adds. A hostile page can make a browser send
+  cookies; it cannot add that header without a CORS preflight we refuse.
+- The public key reaches the container through the Tutor plugin, computed from
+  `JWT_RSA_PRIVATE_KEY` the same way Tutor does for the LMS. The private key never does.
+
+Verified live: a token minted the way the LMS mints a login cookie is accepted
+(`GET /api/me` 200); cookies without the opt-in header, a tampered signature, and an
+edited payload are all 401.
+
+**Two things this changes for the browser, still to do.**
+1. The cookies are scoped to `local.openedx.io`, so they are never sent to
+   `http://localhost:8010`. In dev the API must be reached at
+   `http://local.openedx.io:8010`, and `WEB_ORIGIN` must list
+   `http://apps.local.openedx.io:2003` (credentials need an explicit origin, not `*`).
+   In production the API must sit under the same parent domain as the LMS.
+2. Socket.IO cannot add the `USE-JWT-COOKIE` header, and the signature cookie is
+   unreadable, so the socket handshake must read the cookies itself, guarded by the
+   origin check Socket.IO already does.
+
+### Members and ownership ✅ (step 2, server)
+Migrations **003** (`rooms.name`, `rooms.host_user_id`) and **004** (`room_members`).
+Because 003 is an `ALTER`, which cannot be written to be re-runnable, `migrate.py` now
+**records each applied file in `schema_migrations` and applies it once**. Files 001 and
+002 predate that table, are idempotent, and are simply run once more and recorded.
+
+All of these need a login; the account always comes from the verified token, never from
+the request:
+
+| Route | Who | What |
+|---|---|---|
+| `POST /api/rooms` | any login + host password | creates a class; the creator is its teacher and first member, in one transaction; optional `name` |
+| `GET /api/me/classes` | any login | the account's classes, most recently visited first; archived ones left out |
+| `POST /api/rooms/{code}/join` | any login | records membership (the one step that needs the code); idempotent; role is never changed by joining; 410 if archived |
+| `GET /api/rooms/{code}/members` | teacher | member list, teacher first |
+| `DELETE /api/rooms/{code}/members/{id}` | teacher | removes a student; the teacher cannot be removed |
+| `POST /api/rooms/{code}/leave` | member (student) | the student steps out: stamps `room_members.left_at` (migration 008); the class stays in their list and `POST .../join` rejoins it with no typing; notes kept; the teacher cannot leave |
+
+Also, since the review: the library proxy (`/library/...`) and `GET /api/texts` need a login;
+`GET /api/rooms/{code}` and `POST .../join` need one too and are rate-limited per account
+(30 attempts a minute, `ratelimit.py`) because a class code is what lets someone in; a note's
+offsets must match its quote, and the per-student note cap is enforced inside the insert; the
+ended-session flag is stored (`007_session_ended.sql`) and a live connection is dropped when its
+login expires (`auth:expired`).
+| `POST /api/rooms/{code}/change-code` | teacher | new code, old one stops working at once, members unaffected |
+| `POST /api/rooms/{code}/archive` | teacher | no one can join; leaves everyone's list |
+
+Decisions worth keeping:
+- **A room made before accounts has no owner and nobody can manage it.** Guessing an
+  owner would hand it to the wrong person. `is_host` is explicit about this rather than
+  leaning on `None == id` being false.
+- **403 for "not your class", 404 for "no such class".** Telling them apart leaks only that
+  a code exists, which `GET /api/rooms/{code}` already says.
+- Members hang off the **room id**, not the code, which is why changing the code does not
+  disturb anyone already in.
+
+Verified live with two real LMS accounts (A creates, B joins): create without login 401;
+the lists; B refused (403) on members, change-code and archive; remove then rejoin; the
+old code 404 after a change while B still sees the class under the new one; archive then
+B's join 410 and the class gone from B's list. The smoke test still passes 19/19 (it now
+takes `AUTH_TOKEN`; `scripts/make_test_login.py` makes a throwaway login with no LMS, and
+CI uses it, with every migration instead of only `001`).
+
+### The socket on accounts ✅ (step 3)
+`events.py`, rewritten. A socket is an account:
+
+- **Connecting needs a login**, by cookie from a browser (the `Origin` must be one of ours,
+  checked by Socket.IO and again by the service) or `auth: {token}` for a script. Refusals
+  carry a reason in `connect_error`.
+- **`room:join` needs membership.** The code is entered once over HTTP; after that the
+  account is the credential, and a removed member is refused however often they reconnect.
+- **The teacher is the room's owner.** `teach:goto` and the new `session:end` are checked
+  against the verified login on every message. The host token, the recovery code, the
+  `verify-host` route and `room:close` are **gone**; migration 005 makes the old column
+  nullable and nothing writes it.
+- **Presence counts people, not tabs**, and carries `teacherHere`.
+- **The HTTP routes act on live rooms.** Removing a member drops them from the live class
+  on every tab (`member:removed`); archiving tells everyone (`room:closed`). Socket rooms
+  are keyed by the room **id**, so changing the code strands nobody.
+
+Things found while building it:
+- **`tests/test_socket.py` first passed every refusal test with the socket *client* library
+  not installed**, because "connecting failed" was all it asserted. Refusal tests now
+  assert the server's stated reason, and `aiohttp` is a dev dependency.
+- **Socket.IO is not thread-safe.** A test that emitted from its own event loop heard
+  nothing; server-side calls must run on the server's loop, as the HTTP routes do in
+  production.
+- **A test fixture that replaced `api.state.live` and never put it back** made a later
+  test talk to a fake. Shared state is restored now.
+
+Verified: 155 tests, including real socket clients against a real server; and the smoke
+test, now **29 checks over four accounts** (teacher, student, latecomer, outsider), run
+against the live Tutor stack with tokens the real LMS issued, **29/29**.
+
+### The reader ✅ (step 4)
+In `frontend-app-extension/src/classroom`, with styles in `brand-openedx`.
+
+- **A login on every call.** `api.ts` uses the platform's authenticated client, opting out
+  of the CSRF-token lookup (this service has no such endpoint). The socket connects with
+  `withCredentials` after an ordinary request has refreshed the login cookie, since a
+  socket cannot refresh it itself. The page was already behind `AuthenticatedPageRoute`.
+- **The dev API moved to `http://local.openedx.io:8010`** (was `localhost`), in both the
+  reader's fallback and the Tutor plugin. The login cookies are scoped to
+  `local.openedx.io`, so a service on `localhost` never sees them.
+- **The code screen is "Your classes".** Each class is a card (name, a Teaching/Student
+  pill, member count) that opens in one click with no code. Below it, a code field that
+  records membership then enters. "Start a class" takes a text, an optional class name and
+  the host password, then shows the code for the board. The recovery-code screens, the
+  "Take back control" flow and the "Return to your class" link are gone.
+- **Inside a class:** the class's own name with the text's title beneath; the teacher sees
+  the code, **Manage class** and **End session**; a student sees **Waiting for the teacher**
+  while `teacherHere` is false, and may read ahead. The teacher has no follow switch.
+- **Manage class** (a modal): the code with **Change the code**, the member list with
+  **Remove**, and **Archive this class** behind a confirmation. A changed code is followed
+  by the page so a refresh finds the class.
+- **Three ways a class stops being live, said plainly:** the session ended (the class is
+  kept, so a refresh still finds it), archived, or removed. Archived, removed and refused
+  joins forget the remembered class.
+
+Verified: the unit suite (the page, the hook against a stand-in socket, the HTTP client,
+the code screen and the manage tools), and live tests against the running service with
+tokens the real LMS issued, driving the hook and the code screen as a teacher and a
+student: joining, the role, `teacherHere`, a teacher move reaching a student, a student
+being refused, a wrong code, ending a session, and joining once then finding the class in
+the list. A browser-shaped request (preflight, then the real call with the login cookies
+and the opt-in header, from the MFE's origin) is answered correctly, a page on another site
+is refused, and a socket handshake with the cookies succeeds.
+
+**Not verified: a real browser.** The browser pane cannot open `openedx.io` hosts, so the
+page has not been seen running against a real login cookie. That is the first thing to try
+in `tutor dev`. If it fails, check in this order: the cookie is present for
+`local.openedx.io` (DevTools, Application), the API is being called at
+`http://local.openedx.io:8010`, and the response carries
+`access-control-allow-credentials`.
+
+### Notes ✅ (students only, for now)
+A student selects words, a small bar offers four colours and "Add note", and the words stay
+highlighted from then on. Private, kept for months, and the same on every device.
+
+**Decided with the product owner:** private notes; four colours (yellow, green, blue,
+pink); highlight *words*, not whole lines; students only for now (teachers later); teacher-
+shared highlights later; export later; notes **kept** when a member is removed or the class
+is archived.
+
+**How a note is pinned.** By the line (segment id), the text on it (source or translation),
+and where inside *that text* it begins and ends, counted in code points from the start of
+the line's own text and not of the page, so it lands on the same words on any screen, font
+or layout. The selected words and 24 characters either side are kept too: if the library
+ever edits a line the saved position stops matching, and they are how the words are found
+again (the best-matching occurrence wins when the words repeat). If they cannot be found
+the note is listed as "text changed" rather than drawn on the wrong words.
+
+**Server** (`notes.py`, migration 006, routes under `/api/rooms/{code}/notes`): list,
+create, change colour/words, delete.
+- **Students only, in one place** (`NOTES_ROLE`), so allowing teachers is one line.
+- **Private:** every query is for the verified account *and* the class; a guessed note id
+  reaches nothing (a "not found", which is also all anyone else's id ever says).
+- **Kept, not lost:** no foreign key to membership, so a removed member's notes stay in the
+  database, are unreachable while they are out, and are back if they rejoin. An archived
+  class can still be read but not written (410).
+- **Nothing malformed is stored:** colour and layer from fixed lists, sane offsets, the
+  line must belong to the class's text, length caps on quote/context/words, and a cap on
+  how many a student can keep. What a note may change is its colour and words, never where
+  it is.
+
+**Reader.**
+- `anchors.ts` is plain functions with plain tests: snapping a selection to whole words
+  (Tibetan to whole *syllables*, never starting or ending on the tsek, never cutting a stack),
+  building an anchor, finding words again, and cutting a line into pieces so overlapping
+  highlights both show. Offsets come from the layer element's own text, which highlights
+  never change (they add elements, not characters).
+- A selection is usable only if it sits inside one line's one text; one that crosses two
+  lines, or the Tibetan and its English, is refused for now.
+- A bar over the selection on a laptop; **along the bottom on a phone**, where it will not
+  sit on the phone's own Copy menu. One press on a colour saves a plain highlight; "Add note"
+  opens a dialog for the words. A highlight with words is dotted-underlined. Pressing a
+  highlight opens its note, but letting go of a *drag* over one does not.
+- **Following the teacher waits** while a student has words selected or a note open, so the
+  screen does not move under them.
+- **My notes** (a header button): every note in reading order, jump to its line, edit.
+- A teacher sees none of it: no highlights, no bar, no button, no fetch. Their tap still
+  moves the class and nothing competes with it.
+
+**Verified:** 194 service tests; the live API against the running service with real LMS
+accounts (a teacher refused, an outsider refused, bad lines/colours/ranges refused, a second
+student seeing nothing and unable to change or delete by id, removal hides and rejoin
+restores, archive allows reading but not writing, and the rows are still in MySQL after both);
+the reader's unit tests including the anchoring cases that break naive versions; and the
+hook against the live server as three accounts. The styles were checked in a preview at
+laptop and phone width.
+
+**Not verified:** a real browser and a real finger. Selecting Tibetan with a long-press and
+the handles on an actual phone is the riskiest part and needs trying on a device: whether the
+bottom bar stays clear of the phone's own menu, and whether a selection survives a teacher's
+move (the auto-pause is there to protect it).
+
+### Remaining
+5. **Notes later:** teachers' own notes; teacher-shared highlights; export; a highlight that
+   spans two lines.
+6. **Proxy authentication.** The library proxy is still open to anyone who can reach it;
+   with logins in place it can now require one.
+7. **A real class, end to end,** on the server (`tutor local`).
 
 ### Step 6 — Styles ✅
 A `.classroom-page` / `.classroom-reader` section in

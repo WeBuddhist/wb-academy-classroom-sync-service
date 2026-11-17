@@ -12,9 +12,10 @@ import logging
 from contextlib import asynccontextmanager
 
 import socketio
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from .auth import Authenticator, current_user, User
 from .config import config, warn_on_insecure_defaults
 from .db import Database
 from .events import attach
@@ -39,6 +40,12 @@ async def lifespan(app: FastAPI):
     app.state.library = LibraryClient(
         config.library_base_url, config.library_app_name, config.library_api_key
     )
+    # None when the login settings are missing; routes needing a user then answer 503.
+    app.state.authenticator = (
+        Authenticator(config.jwt_public_jwk_set, config.jwt_issuer, config.jwt_audience)
+        if config.jwt_public_jwk_set and config.jwt_issuer and config.jwt_audience
+        else None
+    )
     try:
         yield
     finally:
@@ -60,6 +67,13 @@ api.include_router(router)
 api.include_router(proxy_router)
 
 
+@api.get("/api/me")
+async def me(user: User = Depends(current_user)) -> dict[str, str]:
+    """Who the server thinks you are. What the reader asks first, so a missing or expired
+    login is found on the code screen rather than part-way into joining a class."""
+    return {"id": user.id, "username": user.username, "name": user.name}
+
+
 @api.get("/api/health")
 async def health() -> dict[str, bool]:
     return {"ok": True}
@@ -74,7 +88,12 @@ sio = socketio.AsyncServer(
 
 # The pool is opened in `lifespan`, after this module is imported, so the handlers
 # reach it through a callable rather than capturing it now.
-attach(sio, lambda: api.state.database.pool)
+api.state.live = attach(
+    sio,
+    lambda: api.state.database.pool,
+    lambda: api.state.authenticator,
+    config.web_origins,
+)
 
 app = socketio.ASGIApp(sio, other_asgi_app=api)
 

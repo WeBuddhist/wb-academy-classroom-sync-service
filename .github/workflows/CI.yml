@@ -76,8 +76,17 @@ jobs:
           pip install .
           npm ci
 
+      # Every migration, in order, the way Tutor applies them. This once ran only
+      # 001_init.sql, which left out everything added since.
       - name: Create the schema
-        run: mysql -h 127.0.0.1 -uroot -pci classroom < migrations/001_init.sql
+        env:
+          DATABASE_URL: mysql://root:ci@127.0.0.1:3306/classroom
+        run: python -m classroom_sync.migrate
+
+      # No LMS here, so a login is made up: a fresh key, and tokens signed with it. The
+      # service is told the public half; the smoke test is given a token.
+      - name: Make a test login
+        run: python scripts/make_test_login.py --user teacher --user student --user late --user outsider >> "$GITHUB_ENV"
 
       - name: Start the server
         env:
@@ -86,6 +95,7 @@ jobs:
           LIBRARY_APP_NAME: ${{ secrets.LIBRARY_APP_NAME }}
           LIBRARY_API_KEY: ${{ secrets.LIBRARY_API_KEY }}
           HOST_PASSWORD: ci-host-password
+          # JWT_PUBLIC_JWK_SET, JWT_ISSUER and JWT_AUDIENCE come from the step above.
         run: |
           uvicorn classroom_sync.app:app --host 127.0.0.1 --port 8000 &
           for _ in $(seq 1 30); do
@@ -97,4 +107,5 @@ jobs:
         env:
           API_URL: http://127.0.0.1:8000
           HOST_PASSWORD: ci-host-password
+          # AUTH_TOKEN and AUTH_TOKEN_STUDENT / _LATE / _OUTSIDER come from the "Make a test login" step.
         run: node tests/smoke.mjs

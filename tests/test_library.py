@@ -167,3 +167,96 @@ async def test_a_server_error_fetching_a_text_still_raises():
 
     with pytest.raises(LibraryError):
         await client_with(handler).fetch_text("t1")
+
+
+def routes_with_alignment(pairs_forward: bool, pairs_reverse: bool = False):
+    """Text t1 (edition ed-S) with one translation text t2 (edition ed-T)."""
+    page = {"items": [{"source_segment": {"id": "a"}, "target_segment": {"id": "b"}}]}
+    empty = {"items": [], "has_more": False}
+    return {
+        "/v2/texts/t1": (200, {"id": "t1", "translations": ["t2"]}),
+        "/v2/texts/t2/editions": (200, [{"id": "ed-T"}, {"id": "ed-T2"}]),
+        "/v2/editions/ed-S/alignments/ed-T": (200, page if pairs_forward else empty),
+        "/v2/editions/ed-T/alignments/ed-S": (200, page if pairs_reverse else empty),
+    }
+
+
+@pytest.mark.asyncio
+async def test_translation_is_the_first_translations_first_edition():
+    library = client_with(json_route(routes_with_alignment(pairs_forward=True)))
+    assert await library.resolve_translation("t1", "ed-S") == "ed-T"
+
+
+@pytest.mark.asyncio
+async def test_translation_aligned_only_the_other_way_round_still_counts():
+    library = client_with(
+        json_route(routes_with_alignment(pairs_forward=False, pairs_reverse=True))
+    )
+    assert await library.resolve_translation("t1", "ed-S") == "ed-T"
+
+
+@pytest.mark.asyncio
+async def test_translation_with_no_alignment_is_not_chosen():
+    """An empty English column on every student's screen is worse than none."""
+    library = client_with(json_route(routes_with_alignment(pairs_forward=False)))
+    assert await library.resolve_translation("t1", "ed-S") is None
+
+
+@pytest.mark.asyncio
+async def test_text_with_no_translations_gives_none():
+    library = client_with(json_route({"/v2/texts/t1": (200, {"id": "t1"})}))
+    assert await library.resolve_translation("t1", "ed-S") is None
+
+
+@pytest.mark.asyncio
+async def test_unaligned_translation_is_skipped_for_the_next_one():
+    page = {"items": [{"source_segment": {"id": "a"}, "target_segment": {"id": "b"}}]}
+    library = client_with(json_route({
+        "/v2/texts/t1": (200, {"id": "t1", "translations": ["t2", "t3"]}),
+        "/v2/texts/t2/editions": (200, [{"id": "ed-2"}]),
+        "/v2/texts/t3/editions": (200, [{"id": "ed-3"}]),
+        "/v2/editions/ed-S/alignments/ed-2": (200, {"items": []}),
+        "/v2/editions/ed-2/alignments/ed-S": (200, {"items": []}),
+        "/v2/editions/ed-S/alignments/ed-3": (200, page),
+    }))
+    assert await library.resolve_translation("t1", "ed-S") == "ed-3"
+
+
+@pytest.mark.asyncio
+async def test_translation_with_no_editions_is_skipped_not_fatal():
+    library = client_with(json_route({
+        "/v2/texts/t1": (200, {"id": "t1", "translations": ["t2"]}),
+        "/v2/texts/t2/editions": (404, None),
+    }))
+    assert await library.resolve_translation("t1", "ed-S") is None
+
+
+def sent_headers(app_name: str) -> dict:
+    """The headers a client built with this application name puts on a request."""
+    return dict(LibraryClient("http://library.test", app_name, "key")._client.headers)
+
+
+def test_the_application_header_is_sent_when_a_name_is_set():
+    headers = sent_headers("my-app")
+    assert headers["x-application"] == "my-app"
+    assert headers["x-api-key"] == "key"
+
+
+def test_the_application_header_is_left_out_when_no_name_is_set():
+    """The production library refuses a name it has not registered, but accepts the key."""
+    headers = sent_headers("")
+    assert "x-application" not in headers
+    assert headers["x-api-key"] == "key"
+
+
+@pytest.mark.asyncio
+async def test_a_later_translations_error_does_not_undo_an_earlier_one_that_lines_up():
+    page = {"items": [{"source_segment": {"id": "a"}, "target_segment": {"id": "b"}}]}
+    library = client_with(json_route({
+        "/v2/texts/t1": (200, {"id": "t1", "translations": ["t2", "t3"]}),
+        "/v2/texts/t2/editions": (200, [{"id": "ed-2"}]),
+        "/v2/texts/t3/editions": (200, [{"id": "ed-3"}]),
+        "/v2/editions/ed-S/alignments/ed-2": (200, page),
+        # Nothing at all is routed for ed-3: asking about it fails.
+    }))
+    assert await library.resolve_translation("t1", "ed-S") == "ed-2"

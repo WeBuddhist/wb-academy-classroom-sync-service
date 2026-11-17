@@ -18,12 +18,16 @@ here and never reaches the library. Adding a path is a deliberate act.
 
 import re
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 
+from .auth import current_user
 from .library import LibraryError
 
-router = APIRouter(prefix="/library")
+# Behind the Academy login. The key this forwards can read the whole library, so it is not for
+# anyone who can merely reach the service: only an account that is logged in may use it (the
+# reader sends its login with every call).
+router = APIRouter(prefix="/library", dependencies=[Depends(current_user)])
 
 #: Opaque library ids: nanoid-shaped, so no slashes and nothing path-traversing.
 _ID = r"[A-Za-z0-9_-]{1,64}"

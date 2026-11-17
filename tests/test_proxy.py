@@ -100,3 +100,22 @@ def test_content_encoding_is_passed_through():
     assert "content-encoding" in PASS_THROUGH_HEADERS
     assert "content-length" in PASS_THROUGH_HEADERS, "both, or neither"
     assert "vary" in PASS_THROUGH_HEADERS, "a cache needs it alongside the encoding"
+
+
+# -- who may use it -------------------------------------------------------------------
+
+
+def test_the_proxy_and_the_text_search_need_a_login():
+    from fastapi.testclient import TestClient
+
+    from classroom_sync.app import api
+    from classroom_sync.auth import Authenticator
+    from tests.test_auth import AUDIENCE, ISSUER, jwk_set
+
+    api.state.authenticator = Authenticator(jwk_set(), ISSUER, AUDIENCE)
+    try:
+        client = TestClient(api)
+        assert client.get("/library/v2/texts").status_code == 401
+        assert client.get("/api/texts?title=x").status_code == 401
+    finally:
+        api.state.authenticator = None

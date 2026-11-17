@@ -39,10 +39,12 @@ def test_every_write_opens_its_own_transaction():
     Asserted structurally, because the failure is silent and partial."""
     import inspect
 
-    from classroom_sync import db, rooms
+    from classroom_sync import db, notes, rooms
 
     for function in (db.Database.register_text, rooms.create_room,
-                     rooms.set_current_segment, rooms.close_room):
+                     rooms.set_current_segment, rooms.close_room,
+                     rooms.add_member, rooms.remove_member, rooms.change_code,
+                     notes.create_note, notes.update_note, notes.delete_note):
         source = inspect.getsource(function)
         assert "conn.begin()" in source, f"{function.__name__} must open a transaction"
         assert "commit()" in source, f"{function.__name__} must commit"

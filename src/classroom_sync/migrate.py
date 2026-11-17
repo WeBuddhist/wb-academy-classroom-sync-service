@@ -5,8 +5,9 @@ init task has to create the schema from inside this container, where the .sql fi
 live. Keeping a mysql client in the image just to run four CREATE TABLEs would be a
 bigger dependency than this module.
 
-Safe to run repeatedly: `001_init.sql` is written with `create table if not exists`
-throughout, which is what lets Tutor run this on every `init` rather than once.
+Safe to run repeatedly: each file is applied once and recorded in `schema_migrations`,
+so Tutor can run this on every `init`. Files up to 002 predate that table and are also
+written with `create table if not exists`, so applying them once more is harmless.
 """
 
 import asyncio
@@ -48,19 +49,44 @@ async def apply(directory: pathlib.Path = MIGRATIONS) -> int:
     params = parse_database_url(config.database_url)
     conn = await aiomysql.connect(**params)
     try:
+        # Each file is applied **once**, and recorded. Until now every file was written to
+        # be safe to re-run (`create table if not exists`) and re-run on every init, which
+        # cannot express "add a column": MySQL has no `add column if not exists`.
+        # Files already applied before this table existed are simply run once more and
+        # recorded; they are idempotent, so that is safe.
+        async with conn.cursor() as cur:
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message=r".*already exists.*")
+                await cur.execute(
+                    """
+                    create table if not exists schema_migrations (
+                      name       varchar(255) not null,
+                      applied_at timestamp    not null default current_timestamp,
+                      primary key (name)
+                    ) engine=InnoDB default charset=utf8mb4
+                    """
+                )
+            await cur.execute("select name from schema_migrations")
+            applied = {row[0] for row in await cur.fetchall()}
+        await conn.commit()
+
         for path in files:
+            if path.name in applied:
+                print(f"{path.name}: already applied")
+                continue
             parts = statements(path.read_text())
             async with conn.cursor() as cur:
                 for statement in parts:
-                    # MySQL raises a warning for each `create table if not exists`
-                    # whose table is already there. That is the normal case — Tutor
-                    # runs this on every init — and four warnings per run reads as
-                    # something being wrong when nothing is.
+                    # MySQL raises a warning for `create table if not exists` whose table
+                    # is already there: the normal case for the first two files.
                     with warnings.catch_warnings():
                         warnings.filterwarnings(
                             "ignore", message=r".*already exists.*"
                         )
                         await cur.execute(statement)
+                await cur.execute(
+                    "insert into schema_migrations (name) values (%s)", (path.name,)
+                )
             await conn.commit()
             print(f"{path.name}: {len(parts)} statement(s) applied")
     finally:

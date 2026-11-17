@@ -31,6 +31,9 @@ dependencies = [
   # caching_sha2_password, and aiomysql cannot do that without it. Connecting fails
   # outright otherwise; found by connecting to Tutor's own MySQL, not by reading docs.
   "aiomysql[rsa]",
+  # Checks the Academy login (an Open edX JWT) against the platform's public key.
+  # [crypto] for RS256, which is what Open edX signs with.
+  "PyJWT[crypto]",
   # Talks to the OpenPecha library. Async, and already present as a test
   # dependency for FastAPI's TestClient, so this adds nothing new to install.
   "httpx",
@@ -42,6 +45,7 @@ dev = [
   "pytest-asyncio",
   "pytest-cov",
   "httpx",          # FastAPI's TestClient
+  "aiohttp",        # python-socketio's async *client*, used by tests/test_socket.py
   "pre-commit",
 ]
 

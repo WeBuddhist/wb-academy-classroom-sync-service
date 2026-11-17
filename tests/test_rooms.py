@@ -1,6 +1,7 @@
 """The room primitives — the security boundary of this service.
 
-Creation and lookup need a database and are exercised by scripts/check_rooms.py.
+Creation, lookup and membership need a database and are exercised end to end by
+tests/smoke.mjs.
 What is here is everything that can be wrong without a database being involved, which
 is most of what matters: a guessable code, a leaky comparison, a code that will not
 match what a student typed.
@@ -12,12 +13,9 @@ import string
 from classroom_sync.rooms import (
     ROOM_CODE_ALPHABET,
     ROOM_CODE_LENGTH,
-    hash_token,
-    new_host_token,
     new_room_code,
     normalise_code,
     password_matches,
-    tokens_match,
 )
 
 
@@ -60,27 +58,6 @@ def test_the_code_generator_uses_secrets_not_random():
     assert first != [new_room_code() for _ in range(5)]
 
 
-def test_host_tokens_are_long_enough_to_resist_guessing():
-    token = new_host_token()
-    assert len(token) >= 24
-    assert set(token) <= set(string.ascii_letters + string.digits + "-_")
-
-
-def test_a_token_matches_only_its_own_hash():
-    token = new_host_token()
-    assert tokens_match(token, hash_token(token))
-    assert not tokens_match(token + "x", hash_token(token))
-    assert not tokens_match("", hash_token(token))
-
-
-def test_the_stored_hash_is_not_the_token():
-    """Only the hash is stored, so a database leak cannot be used to drive a class."""
-    token = new_host_token()
-    stored = hash_token(token)
-    assert token not in stored
-    assert len(stored) == 64
-
-
 def test_password_comparison_handles_the_empty_case():
     assert password_matches("hunter2", "hunter2")
     assert not password_matches("", "hunter2")
@@ -93,11 +70,10 @@ def test_a_student_typing_lowercase_finds_the_room():
 
 
 def test_comparisons_are_constant_time():
-    """`==` on a secret leaks its prefix through timing. Asserted structurally: both
-    comparisons must route through hmac.compare_digest."""
+    """`==` on a secret leaks its prefix through timing. Asserted structurally: the
+    comparison must route through hmac.compare_digest."""
     import inspect
 
     from classroom_sync import rooms
 
-    for function in (rooms.tokens_match, rooms.password_matches):
-        assert "compare_digest" in inspect.getsource(function)
+    assert "compare_digest" in inspect.getsource(rooms.password_matches)

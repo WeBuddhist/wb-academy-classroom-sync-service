@@ -36,7 +36,7 @@ hooks.Filters.CONFIG_DEFAULTS.add_items([
     ("CLASSROOM_MYSQL_USERNAME", "classroom"),
     # The OpenPecha library. The key lives here and in the service; it never reaches a
     # browser, which is why the reader's library calls are proxied through the service.
-    ("CLASSROOM_LIBRARY_BASE_URL", "https://library.webuddhist.com"),
+    ("CLASSROOM_LIBRARY_BASE_URL", "https://library-prod.webuddhist.com"),
     ("CLASSROOM_LIBRARY_APP_NAME", ""),
     ("CLASSROOM_LIBRARY_API_KEY", ""),
     # The service is one process holding sockets, not a worker pool. It is small.
@@ -78,6 +78,18 @@ ENVIRONMENT = """
     LIBRARY_API_KEY: "{{ CLASSROOM_LIBRARY_API_KEY }}"
     WEB_ORIGIN: "%s"
 """.rstrip() % (DATABASE_URL, PROD_WEB_ORIGIN)
+
+# How the service checks the Academy login. All of it is public: the issuer and audience
+# Open edX puts in its tokens, and the PUBLIC half of its signing key, worked out here the
+# same way Tutor works it out for the LMS's own settings (see tutor's
+# templates/apps/openedx/settings/partials/common_all.py). The private key never reaches
+# this container. Added after the `%` formatting above because Jinja's `{%` would be read
+# as a format directive.
+ENVIRONMENT += """
+    {% set jwt_rsa_key | rsa_import_key %}{{ JWT_RSA_PRIVATE_KEY }}{% endset %}
+    JWT_ISSUER: "{{ JWT_COMMON_ISSUER }}"
+    JWT_AUDIENCE: "{{ JWT_COMMON_AUDIENCE }}"
+    JWT_PUBLIC_JWK_SET: '{"keys":[{"kid":"openedx","kty":"RSA","e":"{{ jwt_rsa_key.e|long_to_base64 }}","n":"{{ jwt_rsa_key.n|long_to_base64 }}"}]}'"""
 
 
 hooks.Filters.ENV_PATCHES.add_items([
@@ -144,11 +156,13 @@ handle_path /classroom-api/* {
         # Caddy's origin; in production it is the same origin as the page.
         "mfe-env-config-runtime-definitions-extension",
         """
-// In production Caddy puts this on the MFE's own origin, so it is a path. In dev
-// there is no Caddy, so it is the service's published port -- a different origin,
-// which is why the dev patch widens WEB_ORIGIN to match.
+// In production Caddy puts this on the MFE's own origin, so it is a path, and it sits
+// under the same parent domain as the LMS. In dev there is no Caddy, so it is the
+// service's published port -- a different origin, which is why the dev patch widens
+// WEB_ORIGIN to match. The host is the LMS's, NOT `localhost`: the Academy login is
+// cookies scoped to that host, and a browser sends them nowhere else.
 config.CLASSROOM_API_URL = process.env.NODE_ENV === 'development'
-  ? 'http://localhost:{{ CLASSROOM_DEV_PORT }}'
+  ? 'http://{{ LMS_HOST }}:{{ CLASSROOM_DEV_PORT }}'
   : '{% if ENABLE_HTTPS %}https{% else %}http{% endif %}://{{ MFE_HOST }}/classroom-api';
 """,
     ),
