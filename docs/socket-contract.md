@@ -30,14 +30,13 @@ socket bug rather than a naming bug. See [CONTEXT.md](CONTEXT.md).
 
 ## The whole surface
 
-Eight messages, twelve field names.
+Seven messages, twelve field names.
 
 | Message | Direction | Payload fields |
 |---|---|---|
 | `room:join` | client → server | `code`, `displayName` |
 | `teach:goto` | client → server | `segmentId`, `hostToken` |
 | `room:close` | client → server | `hostToken` |
-| `room:state` | server → client | *(a `RoomState`)* |
 | `teach:goto` | server → client | `segmentId` |
 | `presence` | server → client | `count` |
 | `room:closed` | server → client | *(no payload)* |
@@ -45,8 +44,15 @@ Eight messages, twelve field names.
 Every client→server message is acknowledged with `{ ok: true, ... }` or
 `{ ok: false, error: string }`.
 
-`room:state` is the authoritative snapshot, sent on join and on reconnect; it overrides
-local state. `teach:goto` is the incremental move, applied optimistically.
+**The authoritative snapshot arrives in the ack to `room:join`**, not as an event of its
+own. A reconnect re-emits `room:join`, so one path serves both the first join and every
+resume — which is all the resume logic a client needs. `teach:goto` is the incremental
+move, applied optimistically.
+
+An earlier version of this document specified a `room:state` event as the snapshot.
+Neither side ever sent or handled it; it is removed rather than implemented, because
+the ack already does the job and a second mechanism would be one more thing to keep in
+step.
 
 `teach:goto` and `room:close` carry the host token and are rejected server-side unless it
 matches the room's stored hash. **The teacher-only UI is a convenience, not the security
@@ -119,7 +125,6 @@ interface ClientToServerEvents {
 }
 
 interface ServerToClientEvents {
-  'room:state': (state: RoomState) => void
   'teach:goto': (payload: { segmentId: string }) => void
   presence: (payload: { count: number }) => void
   'room:closed': () => void

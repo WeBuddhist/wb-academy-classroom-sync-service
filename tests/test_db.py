@@ -20,10 +20,32 @@ def test_parses_a_tutor_style_url():
     assert params["charset"] == "utf8mb4"
 
 
-def test_autocommit_is_off():
-    """register_text writes a segmentation and its segments in one transaction; with
-    autocommit on, a failure halfway would leave a text with a partial id list."""
-    assert parse_database_url("mysql://u:p@h/db")["autocommit"] is False
+def test_autocommit_is_on():
+    """Regression, and the reasoning here was once backwards.
+
+    MySQL defaults to REPEATABLE READ. With autocommit off, a plain SELECT opens a
+    transaction nothing commits; the connection returns to the pool holding that
+    snapshot, and a later read on it cannot see rows written since. The symptom is a
+    student being told a valid room code does not exist, intermittently.
+
+    Atomicity does not depend on this: every write path calls `conn.begin()`
+    explicitly, which starts a transaction either way.
+    """
+    assert parse_database_url("mysql://u:p@h/db")["autocommit"] is True
+
+
+def test_every_write_opens_its_own_transaction():
+    """Since autocommit is on, a write that forgets `begin()` is no longer atomic.
+    Asserted structurally, because the failure is silent and partial."""
+    import inspect
+
+    from classroom_sync import db, rooms
+
+    for function in (db.Database.register_text, rooms.create_room,
+                     rooms.set_current_segment, rooms.close_room):
+        source = inspect.getsource(function)
+        assert "conn.begin()" in source, f"{function.__name__} must open a transaction"
+        assert "commit()" in source, f"{function.__name__} must commit"
 
 
 def test_a_generated_password_survives_url_encoding():

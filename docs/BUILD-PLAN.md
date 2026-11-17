@@ -695,16 +695,42 @@ loudly on a mismatch. Silently highlighting nothing is the worse outcome.
 
 ## Track B, in order
 
-### Step 1 — A page that does nothing
-New route in the MFE, wrapped in `AuthenticatedPageRoute`. Renders "hello".
+### Step 1 — A page that does nothing ✅
+Route `/classroom` in the MFE, wrapped in `AuthenticatedPageRoute`.
 
-### Step 2 — Copy the contract types
-From [`docs/socket-contract.md`](socket-contract.md), before porting anything that
-imported `@wbac/shared`.
+**Routes live at the root; `/extension/` is only the asset path.** So the page is
+`apps.local.openedx.io:2003/classroom`, not `/extension/classroom` — the same shape as
+the existing `/wishlist`.
 
-### Step 3 — Join and sync, no text
-Port `useRoom.ts`, `api.ts`, `JoinScreen.tsx`, `App.tsx`. Add `socket.io-client`. Show the
-current segment **id** as plain text.
+### Step 2 — Copy the contract types ✅
+`src/classroom/types.ts`, copied from [`socket-contract.md`](socket-contract.md) with a
+header saying what it is: a hand-kept copy of a spec in another language, where a rename
+on either side breaks nothing at build time and everything at class time.
+
+### Step 3 — Join and sync, no text ✅
+`useRoom.ts`, `api.ts`, `JoinScreen.tsx`, `ClassroomPage.tsx`, plus `socket.io-client`.
+Shows the current segment **id** as plain text — deliberately, because that proves the
+whole chain before any rendering work exists.
+
+**Verified against the live service** by `useRoom.live.test.tsx`, four tests, skipped
+unless `CLASSROOM_API_URL` is set:
+
+```
+✓ joins and receives the room state (81 ms)
+✓ a teacher move reaches a student (115 ms)
+✓ a student without the host token cannot move the room
+✓ a wrong room code is rejected rather than left hanging
+```
+
+That test is the only thing checking the two hand-kept copies of the contract still
+agree, so it earns its keep. Three things were needed to make it run, all recorded in
+its docblock:
+
+- `customExportConditions: ["node"]` — without it jsdom resolves socket.io-client's
+  browser build and **no connection is attempted at all**, silently.
+- A pinned jsdom `url` — the default `http://localhost` has no port, is not in the
+  service's `WEB_ORIGIN`, and every request fails CORS before reaching an assertion.
+- XHR rather than `fetch` for its setup, since jsdom does not expose Node's `fetch`.
 
 *Done when:* a teacher clicks, and the id changes on a student's screen. This proves the
 whole chain before any rendering work.
@@ -716,21 +742,146 @@ blocker: the session cookie's domain is `local.openedx.io`, which browsers also 
 `apps.local.openedx.io`, and our route is on that host, so the credentials do arrive.
 See [CONTEXT.md](CONTEXT.md).
 
-### Step 4 — Display the text
-Copy the ~700 lines of fetching and alignment logic. Load the whole text on join. Render
-segments, highlight the current one, scroll to it.
+### Step 4 — Display the text ✅
+`text.ts` loads it, `useText.ts` holds it, `Reader.tsx` renders it. The whole text at
+once when the class is joined — which is what makes everything else simple: no paging,
+no fetching as you scroll, and a student whose network drops keeps reading.
 
-*Done when:* a class can follow along.
+**Far less than the ~700 lines this step budgeted.** The alignment logic is Step 5's;
+what Step 4 needs from the reader is two details, and both are kept with their reasons:
+
+- **Join a segment's lines with `\n`, not `''`.** The edition's content carries no line
+  breaks of its own — the spans are the only record of where they fall, and they run
+  edge to edge. Joining with `''` collapses a four-line verse into one run-on line,
+  which looks plausible and is wrong.
+- **Slice by code point, not by UTF-16 unit.** The library computes offsets in Python,
+  where string indices are code points. That matches JavaScript only while the text
+  stays inside the BMP, and nothing guarantees it will.
+
+One thing deliberately *not* copied: the reader slices per line with `Array.from(...)`,
+which is correct but O(n) each time — fine for a window of sixty lines, quadratic for a
+thousand. Loading a whole text at once asks for the latter, so the content is split into
+code points **once**, and each line slices that array.
+
+Verified against the live library (`text.live.test.ts`): every line present, in order,
+all distinct, multi-line segments keeping their breaks. `Reader.test.tsx` covers the
+rendering with fixtures, in the normal suite.
+
+**A teacher's line is a `<button>`; a student's is a `<p>`.** Not a lint workaround — a
+line the teacher can press is a control and a screen reader should say so, while a
+student's line is prose and calling it a button would be a lie.
+
+*Done:* a class can follow along. 23 tests pass across the MFE's own suites.
 
 ### Step 5 — Stacked translations
 Tibetan above, English below, per segment, where an alignment exists. Hide the lower line
 when there is none.
 
-### Step 6 — Styles
-`.classroom-page` in `brand-openedx`, translating `styles.css` to brand tokens as you go —
-`brand.$spacing-6`, not `24px`.
+### Step 6 — Styles ✅
+A `.classroom-page` / `.classroom-reader` section in
+`brand-openedx/paragon/_extension.scss`, beside `.wishlist-page`. Brand tokens
+throughout — `brand.$spacing-6`, never `24px`.
 
-*Done when:* it looks like part of Academy.
+Three decisions worth keeping:
+
+- **Jomolhari, not the UI face.** The brand sets `$font-family-course-content` aside for
+  content rather than chrome, and this is a work being read, not an interface being
+  used. `$font-family-brand-ui` (Noto Serif Tibetan) stays for the page around it.
+- **`line-height: 1.95`**, far looser than the brand's body. Tibetan stacks vowel signs
+  above and below the base letter, and at a Latin line-height the lines collide.
+- **The current line is a sand band with a saffron rule in the gutter**, not orange
+  text. It reads from the back of a room without the highlight fighting the text.
+
+Looking at it rendered caught a bug no test would have: `width: 100%` with negative
+margins **shifts** a box rather than widening it, so the highlight sat twelve pixels
+left of the column and stopped twelve pixels short on the right. Measured at
+`bleedLeft: 12, bleedRight: -12`; fixed with `width: calc(100% + #{$spacing-3 * 2})` and
+re-measured symmetric.
+
+Checked at 900px and at 375px: no overflow either way, the reader clamping to 19px on a
+phone, the header stacking. **Tibetan wraps on its own** — browsers break at the tsek
+(U+0F0B), verified with a 238-character line falling onto three visual lines.
+`overflow-wrap: break-word` is there only for a run with no tsek in it.
+
+*Done:* it looks like part of Academy.
+
+### The teacher had no way in
+
+Steps 1–6 built the student's path and the API a teacher needs, and no screen to reach
+it: a room could only be created with `curl`, and a teacher could only become one by
+pasting into `localStorage`. The old app's `JoinScreen` had **four** modes and only one
+was ported.
+
+The other three are now in: **start a class** (search the library live, pick a text,
+host password), **your class is ready** (the room code for the board, the recovery code
+shown once), and **take back control** (room code plus recovery code, checked against
+the server before it is trusted). Covered by `JoinScreen.live.test.tsx` against the
+running service — the whole path, plus a wrong password and a wrong recovery code both
+being refused.
+
+The text picker is the one real departure from the original: there is no local
+catalogue to list any more, so it is a live library search.
+
+#### The flaky test was a real server bug
+
+Running the client tests together made `useRoom.live` fail intermittently where it
+passed alone. The diagnosis took three wrong turns — accumulated sockets, then a
+connection leak (measured: there is none, 0 → 8 → 0), then parallelism — before the
+server said plainly what was wrong:
+
+```
+DIAG code= 9VJ6AE rejected= true error= No room with that code.
+```
+
+The room was in the database. **MySQL defaults to REPEATABLE READ, and the pool ran
+with `autocommit=False`,** so every plain SELECT implicitly opened a transaction that
+nothing committed. The connection went back to the pool holding its snapshot, and the
+next read on it could not see anything written since.
+
+In a class that is a student typing a valid code and being told the room does not
+exist — intermittently, decided by which pooled connection they happen to get. Nothing
+in the test suite or the smoke test would have caught it, because both are short enough
+that the pool never cycles.
+
+Fixed by turning autocommit **on**. Atomicity is unaffected: every write path opens its
+transaction explicitly with `conn.begin()`. A test now asserts that, structurally,
+because a write that forgets `begin()` under autocommit fails silently and partially.
+The test that asserted `autocommit is False`, with reasoning that was backwards, now
+asserts the opposite and says why.
+
+Looking at the rendered screen caught one thing no test would have. The room code was
+set in the display face, **Cormorant Garamond, which uses old-style figures** — so `7`
+and `2` dropped below the baseline and read as lowercase letters. On a code chosen
+character by character so it cannot be misread from the back of a room, that undoes the
+whole point. It is now the UI face with `lining-nums tabular-nums`.
+
+#### What the review of the client found
+
+Six issues, all reproduced, five fixed:
+
+- **A second search kept the first choice.** Searching again after picking a text left
+  `textId` set, so Start created a room for a text no longer on screen, with nothing
+  highlighted to say so.
+- **Four of five structural kinds could never match.** The styles used the old
+  classroom app's vocabulary — `title`, `homage`, `outline`, `colophon` — where the
+  library returns `front_matter`, `back_matter`, `verse` and `paragraph`. Checked
+  across three texts. Forty lines of CSS that looked like a feature and were inert,
+  and the reader's own test fixtures were asserting against the invented names too.
+  `kinds.test.ts` now reads the stylesheet and fails on either half of the mismatch.
+- **Students could not stop following.** `follow` was a literal `true`, so anyone who
+  scrolled back to re-read was pulled forward on the teacher's next tap. The ported
+  app had this control; it was dropped. Restored as a switch in the header.
+- **A missing `CLASSROOM_API_URL` fell back to localhost silently.** In production
+  that points every student's browser at their own machine, failing for a reason
+  nothing explains. It now throws — except in development, where the fallback is
+  genuinely load-bearing, since webpack reports `env.config (ignored)` and the value
+  really is undefined under `tutor dev`.
+- **`room:state` was specified and never used.** The contract called it the snapshot
+  sent on join and reconnect; neither side ever sent or handled it. **Removed from the
+  contract and the types** rather than implemented: the `room:join` ack already
+  carries the snapshot, a reconnect re-emits `room:join`, and one mechanism is easier
+  to keep in step than two. Both documents now say so plainly.
+- A `localStorage` read on every render, memoised while the file was open.
 
 ### Step 7 — A real class, end to end
 Teacher on one device, students on others, through Academy.

@@ -50,7 +50,16 @@ def parse_database_url(url: str) -> dict:
         "password": unquote(parsed.password or ""),
         "db": parsed.path.lstrip("/"),
         "charset": "utf8mb4",
-        "autocommit": False,
+        # **Autocommit on, deliberately.** MySQL defaults to REPEATABLE READ, and with
+        # autocommit off a plain SELECT implicitly opens a transaction that nothing
+        # ever commits. That connection goes back to the pool still holding its
+        # snapshot, so the next read on it cannot see anything written since — and a
+        # student typing a valid room code is told the room does not exist. It is
+        # intermittent, because which pooled connection you get decides it.
+        #
+        # Atomicity is unaffected: every write path opens its transaction explicitly
+        # with `conn.begin()`, which starts one regardless of this setting.
+        "autocommit": True,
     }
 
 
