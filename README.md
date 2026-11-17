@@ -1,148 +1,201 @@
-# README
+# wb-academy-classroom-sync-service
 
-> **Note:** This readme template is based on one from the [Good Docs Project](https://thegooddocsproject.dev). You can find it and a guide to filling it out [here](https://gitlab.com/tgdp/templates/-/tree/main/readme). (_Erase this note after filling out the readme._)
+Realtime sync server for live Tibetan text classes. The teacher drives; every student's
+reader highlights and scrolls to the same line.
 
-<h1 align="center">
-  <br>
-  <a href="https://openpecha.org"><img src="https://avatars.githubusercontent.com/u/82142807?s=400&u=19e108a15566f3a1449bafb03b8dd706a72aebcd&v=4" alt="OpenPecha" width="150"></a>
-  <br>
-</h1>
+Students join a room with a short code the teacher writes on the whiteboard — no
+accounts. Because Tibetan prose runs as unbroken syllables with no word spaces, losing
+your place is the default experience in these classes; this removes that.
 
-## _Project Name_
-_The project name should match its code's capability so that new users can easily understand what it does._
+## The one rule
 
-## Owner(s)
+The only thing that travels between teacher and student is a **segment id**. Never a DOM
+range, never a character offset, never a scroll position. A segment id means the same
+line on a phone, a tablet and a projector, at any font size, in any text layer — which is
+what makes one teacher's click land correctly on thirty different screens.
 
-_Change to the owner(s) of the new repo. (This template's owners are:)_
-- [@ngawangtrinley](https://github.com/ngawangtrinley)
-- [@mikkokotila](https://github.com/mikkokotila)
-- [@evanyerburgh](https://github.com/evanyerburgh)
+Everything else follows from it: late joiners just ask for the current id, reconnects are
+idempotent, and translation layers can be added later without touching the protocol.
 
+## Status
 
-## Table of contents
-<p align="center">
-  <a href="#project-description">Project description</a> •
-  <a href="#who-this-project-is-for">Who this project is for</a> •
-  <a href="#project-dependencies">Project dependencies</a> •
-  <a href="#instructions-for-use">Instructions for use</a> •
-  <a href="#contributing-guidelines">Contributing guidelines</a> •
-  <a href="#additional-documentation">Additional documentation</a> •
-  <a href="#how-to-get-help">How to get help</a> •
-  <a href="#terms-of-use">Terms of use</a>
-</p>
-<hr>
+**Being ported.** This service replaces the Node server in `wb-academy-classroom`, which
+is retired once the port is proven. The client moves separately into
+`frontend-app-extension`.
 
-## Project description
-_Use one of these:_
+**[docs/CONTEXT.md](docs/CONTEXT.md)** maps the systems around this one — Tutor,
+edx-platform, the Django plugin and the MFE — if any of them is unfamiliar.
 
-With _Project Name_ you can _verb_ _noun_...
+Read **[docs/BUILD-PLAN.md](docs/BUILD-PLAN.md)** before working on this — it has the
+three tracks, the thirteen details that must survive the rewrite, and the open decisions.
+**[docs/PLAN.md](docs/PLAN.md)** has the original design; where the two disagree the build
+plan is current, and it says where and why.
 
-_Project Name_ helps you _verb_ _noun_...
+Done so far: **Track A steps 1–3**. Texts, rooms, the library proxy and all five live
+messages, passing **19/19** on the acceptance smoke test against Tutor's MySQL and the
+live library, with delivery measured at 35ms. 58 unit tests besides.
 
+Next: two browsers by hand, then the Tutor plugin.
 
-## Who this project is for
-This project is intended for _target user_ who wants to _user objective_.
+## Scope
 
+This repo is **the sync server only**.
 
-## Project dependencies
-Before using _Project Name_, ensure you have:
-* python _version_
-* _Prerequisite 2_
-* _Prerequisite 3..._
+- **The client** is a page in `frontend-app-extension`; its styles live in
+  `brand-openedx`.
+- **Text processing** — segmenting Tibetan into addressable lines — is a content-pipeline
+  concern and lives elsewhere.
+- **Text data.** No corpus, no source files, no segmented output is ever committed here.
+  In production the service receives texts from the WeBuddhist content API.
 
+## Running it
 
-## Instructions for use
-Get started with _Project Name_ by _(write the first step a user needs to start using the project. Use a verb to start.)_.
+```bash
+pip install -e ".[dev]"
+uvicorn classroom_sync.app:app --reload --port 8000
+```
 
+```bash
+curl localhost:8000/api/health
+```
 
-### Install _Project Name_
-1. _Write the step here._ 
+Tests:
 
-    _Explanatory text here_ 
-    
-    _(Optional: Include a code sample or screenshot that helps your users complete this step.)_
+```bash
+pytest
+```
 
-2. _Write the step here._
- 
-    a. _Substep 1_ 
-    
-    b. _Substep 2_
+Against a real library and a real MySQL, by hand — neither is a pytest, because CI has
+no Tutor stack and a test needing a secret is a test nobody runs:
 
+```bash
+LIBRARY_BASE_URL=… LIBRARY_APP_NAME=… LIBRARY_API_KEY=… python scripts/check_library.py "སྤྱོད་འཇུག"
+```
 
-### Configure _Project Name_
-1. _Write the step here._
-2. _Write the step here._
+```bash
+docker run --rm --network tutor_dev_default -v "$PWD/src:/app/src:ro" -v "$PWD/scripts:/app/scripts:ro" -e DATABASE_URL=mysql://classroom:…@mysql:3306/classroom -e LIBRARY_BASE_URL=… -e LIBRARY_APP_NAME=… -e LIBRARY_API_KEY=… wb-classroom-sync:dev python scripts/check_register.py "སྤྱོད་འཇུག"
+```
 
+Tutor's MySQL does not publish 3306, so that second one runs inside the network — which
+is how the service runs anyway. **`tutor dev` is the local setup here and `tutor local`
+is the server**; do not start the local stack on a development machine, as Tutor stops
+the dev containers to do it.
 
-### Run _Project Name_
-1. _Write the step here._
-2. _Write the step here._
+## How it reaches Open edX
 
+**[`infra/tutor/classroom.py`](infra/tutor/classroom.py)** is the Tutor plugin. Copy it
+to `tutor-plugins/`, then:
 
-### Troubleshoot _Project Name_
-1. _Write the step here._
-2. _Write the step here._
+```bash
+tutor plugins enable classroom && tutor config save && tutor images build classroom
+```
 
-<table>
-  <tr>
-   <td>
-    Issue
-   </td>
-   <td>
-    Solution
-   </td>
-  </tr>
-  <tr>
-   <td>
-    _Describe the issue here_
-   </td>
-   <td>
-    _Write solution here_
-   </td>
-  </tr>
-  <tr>
-   <td>
-    _Describe the issue here_
-   </td>
-   <td>
-    _Write solution here_
-   </td>
-  </tr>
-  <tr>
-   <td>
-    _Describe the issue here_
-   </td>
-   <td>
-    _Write solution here_
-   </td>
-  </tr>
-</table>
+Tutor generates `HOST_PASSWORD` and the database password itself, so there is nothing to
+set but the library credentials:
 
+```bash
+tutor config save --set CLASSROOM_LIBRARY_APP_NAME=… --set CLASSROOM_LIBRARY_API_KEY=…
+```
 
-Other troubleshooting supports:
-* _Link to FAQs_
-* _Link to runbooks_
-* _Link to other relevant support information_
+On a development machine also set `CLASSROOM_SOURCE_DIR` to this checkout: the image
+then builds from it and `src/` is mounted, so an edit needs only
+`tutor dev restart classroom`. Leave it empty on a server and the image builds straight
+from the repository.
 
+`tutor dev do init --limit=classroom` creates the database and applies the schema.
 
-## Contributing guidelines
-If you'd like to help out, check out our [contributing guidelines](/CONTRIBUTING.md).
+**`tutor dev` has no Caddy** — it lives in `docker-compose.prod.yml`, which only
+`tutor local` loads. So in dev the service publishes port 8010 and the page reaches it
+there, cross-origin; in production it is a path on the MFE's own origin. The plugin
+handles both, and `CLASSROOM_API_URL` in the MFE's runtime config points at whichever
+applies.
 
+One Python file in `tutor-plugins/` runs this as a service container beside the LMS, the
+way `studio_tool_service.py` and `tutornotes` already do. Tutor builds the image itself —
+there is no registry and nothing to publish.
 
-## Additional documentation
-_Include links and brief descriptions to additional documentation._
+`tutormfe` leaves a patch point inside the MFE's own Caddy site block, so the route hangs
+off the MFE host:
 
-For more information:
-* [Reference link 1](#)
-* [Reference link 2](#)
-* [Reference link 3](#)
+```
+handle_path /classroom-api/* {
+    reverse_proxy classroom:8000
+}
+```
 
+Same origin as the page, so no CORS and no extra subdomain. Tutor also generates
+`HOST_PASSWORD` and the database password per install via `CONFIG_UNIQUE`, and creates
+the database in an init task. See the build plan, Track A Step 5.
 
-## How to get help
-* File an issue.
-* Email us at openpecha[at]gmail.com.
-* Join our [discord](https://discord.com/invite/7GFpPFSTeA).
+## This server stores segment ids, not text
 
+**No work's content is ever stored here.** The reader fetches text from the OpenPecha
+library directly, so this server never serves it and has no reason to keep it.
 
-## Terms of use
-_Project Name_ is licensed under the [MIT License](/LICENSE.md).
+What it keeps is each text's **id list**, so it can answer the only question it needs to:
+*is this segment part of this room's text?* Without that, a bad id would either go
+unchecked or put the library on the live path of every teacher tap.
+
+A text is registered the first time a room is created against it, by fetching its segment
+list once. This replaces the original design's import pipeline — there is no longer a step
+between "find a text" and "teach it".
+
+The trade: if the library is down **and** a student joins **after** that, the latecomer
+cannot load the text. Everyone already in the room is unaffected — their text is in their
+browser, and sync carries only ids. Judged worth it against maintaining an import
+pipeline and a copy of the corpus.
+
+## Database
+
+**MySQL 8.4** — Tutor's own instance, in a database of its own beside the LMS and notes
+ones. `migrations/001_init.sql` is the whole schema: four tables, none holding content.
+
+Two notes, both explained in the file:
+
+- Identifier columns are `utf8mb4_bin`. Tutor runs MySQL with
+  `--collation-server=utf8mb4_unicode_ci`, which is **case-insensitive**, and segment ids
+  are opaque values from the content pipeline — we cannot assume their case is
+  insignificant.
+- Indexed columns are `VARCHAR`, not `TEXT`, because MySQL cannot index `TEXT` without a
+  prefix length.
+- The key is a **segmentation**, not a text. Segment ids belong to a segmentation, which
+  belongs to an edition; two editions of one work give different ids for the same line.
+  A room pins what its ids actually came from, resolved once at registration, so thirty
+  students cannot resolve thirty different editions.
+
+## Layout
+
+```
+src/classroom_sync/   the service
+migrations/           database schema
+tests/                pytest, plus smoke.mjs (see below)
+infra/native/         deploy scripts from the Node server, to become Tutor plugin patches
+docs/                 the port plan, the original design, the socket contract
+```
+
+## `tests/smoke.mjs` — read this before touching it
+
+This is the acceptance test for the port, written against the Node server and **kept
+unchanged on purpose**. It talks to a running server over HTTP and a socket and never
+imports server code, so it tests this implementation exactly as it tested the old one.
+
+**Do not rewrite it in Python.** A rewritten test no longer proves the behaviour is the
+same, which is the only thing it is there for.
+
+```bash
+API_URL=http://localhost:8000 node tests/smoke.mjs
+```
+
+**19/19 means the port is done.**
+
+## The socket contract
+
+**[docs/socket-contract.md](docs/socket-contract.md)** is the spec — a written document,
+not code. Python cannot import TypeScript and the client lives in another repo, so the
+shared import that used to keep the two sides honest is gone both ways.
+
+What replaces it: `tests/smoke.mjs` guards the server, and the spec's types copied into
+the MFE guard the client. The hazard is specific and quiet — Python writes `segment_id`,
+JavaScript expects `segmentId`, both sides build fine, and thirty screens do nothing.
+
+Open decisions are tracked in the build plan.

@@ -1,0 +1,12 @@
+{
+  "name": "wb-academy-classroom-sync-service-tests",
+  "private": true,
+  "description": "Dependencies for tests/smoke.mjs. The service itself is Python; this exists because the acceptance test is deliberately kept in JavaScript, speaking the wire protocol as a real client does.",
+  "type": "module",
+  "scripts": {
+    "smoke": "node tests/smoke.mjs"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.8.4"
+  }
+}
