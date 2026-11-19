@@ -3,28 +3,60 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "project_name"
-version = "0.0.1"
-authors = [
-  { name="OpenPecha", email="dev@openpecha.org" },
-]
-description = "A small example package"
+name = "classroom-sync-service"
+version = "0.1.0"
+description = "Realtime sync server for live Tibetan text classes"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.12"
+authors = [{ name = "WeBuddhist" }]
 classifiers = [
-    "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
-    "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3.12",
+  "License :: OSI Approved :: MIT License",
+  "Private :: Do Not Upload",
+]
+
+# This is a service, not a library. It is never published to PyPI and never
+# pip-installed by anything else — it ships as a container image. The metadata
+# above exists so the tooling works, not so the package can be distributed.
+dependencies = [
+  "fastapi",
+  "uvicorn[standard]",
+  "python-socketio",
+  # MySQL, because Tutor already runs one (8.4) and already backs it up. Async,
+  # because the whole service is. `asyncmy` is the faster alternative if this ever
+  # becomes the bottleneck, which for four tables and a classroom's worth of traffic
+  # it will not.
+  # The [rsa] extra pulls in `cryptography`. MySQL 8.4 — which is what Tutor runs —
+  # dropped mysql_native_password, so every connection authenticates with
+  # caching_sha2_password, and aiomysql cannot do that without it. Connecting fails
+  # outright otherwise; found by connecting to Tutor's own MySQL, not by reading docs.
+  "aiomysql[rsa]",
+  # Checks the Academy login (an Open edX JWT) against the platform's public key.
+  # [crypto] for RS256, which is what Open edX signs with.
+  "PyJWT[crypto]",
+  # Talks to the OpenPecha library. Async, and already present as a test
+  # dependency for FastAPI's TestClient, so this adds nothing new to install.
+  "httpx",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest",
-    "pytest-cov",
-    "pre-commit",
+  "pytest",
+  "pytest-asyncio",
+  "pytest-cov",
+  "httpx",          # FastAPI's TestClient
+  "aiohttp",        # python-socketio's async *client*, used by tests/test_socket.py
+  "pre-commit",
 ]
 
-
 [project.urls]
-"Homepage" = "https://github.com/OpenPecha/openpecha-project-template"
-"Bug Tracker" = "https://github.com/OpenPecha/openpecha-project-template/issues"
+Homepage = "https://github.com/WeBuddhist/wb-academy-classroom-sync-service"
+Issues = "https://github.com/WeBuddhist/wb-academy-classroom-sync-service/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+asyncio_default_fixture_loop_scope = "function"

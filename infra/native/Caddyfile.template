@@ -1,0 +1,39 @@
+# Rendered to /etc/caddy/Caddyfile by deploy.sh, which substitutes __SITE_HOST__ with
+# the hostname taken from WEB_ORIGIN in /etc/wbac.env. The domain is configured in one
+# place so the app and the certificate can never disagree about what the site is called.
+#
+# Caddy obtains and renews the certificate itself. It needs the domain to already
+# resolve to this server, ports 80 and 443 reachable, and — if the DNS is behind
+# Cloudflare — the proxy turned off, or Cloudflare answers the validation instead.
+
+__SITE_HOST__ {
+	encode zstd gzip
+
+	# The API and the websocket both go to the Node process. Caddy handles WebSocket
+	# upgrades with no extra configuration and applies no read timeout — a teaching
+	# session is mostly long gaps between moves, and nginx's default 60s
+	# proxy_read_timeout silently kills connections like that.
+	handle /api/* {
+		reverse_proxy localhost:3000
+	}
+	handle /socket.io/* {
+		reverse_proxy localhost:3000
+	}
+
+	handle {
+		root * /opt/wbac/apps/web/dist
+
+		# Build assets carry a content hash in the filename, so they can be cached
+		# forever. This matters more than it looks: thirty phones pulling a Tibetan
+		# webfont over one classroom access point is the worst moment of a session.
+		@immutable path /assets/*
+		header @immutable Cache-Control "public, max-age=31536000, immutable"
+
+		# index.html must never be cached, or a deploy never reaches anyone.
+		@html path / /index.html
+		header @html Cache-Control "no-cache"
+
+		try_files {path} /index.html
+		file_server
+	}
+}

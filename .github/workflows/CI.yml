@@ -2,34 +2,110 @@ name: CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
 
 permissions:
   contents: read
 
 jobs:
   test:
-
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v3
-    
-    - name: Set up Python 3.8
-      uses: actions/setup-python@v3
-      with:
-        python-version: "3.8"
-        
-    - name: Install dependencies
-      run: |
-        pip install -U pip
-        pip install .
-        pip install .[dev]
-        
-    - name: Test with pytest
-      run: PYTHONPATH=src pytest
-    
-    - name: Test Coverage
-      run: PYTHONPATH=src pytest --cov project_name
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install -U pip
+          pip install .[dev]
+
+      - name: Test with pytest
+        run: pytest --cov classroom_sync
+
+  # The acceptance test for the port, kept exactly as it was written against the
+  # Node server. It talks to a running server over HTTP and a socket and never
+  # imports any server code, so it tests this implementation unchanged — which is
+  # the whole point of keeping it. Do not rewrite it in Python: a rewritten test
+  # no longer proves the behaviour is the same.
+  #
+  # Only the setup preamble differs from the original: there is no local import
+  # step any more, so it finds a text in the library instead. All 19 assertions are
+  # byte-identical.
+  #
+  # It needs the library, so it runs only where the credentials exist — not on a
+  # fork's pull request. `19/19` is the bar.
+  smoke:
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
+
+    services:
+      mysql:
+        image: mysql:8.4.0
+        env:
+          MYSQL_ROOT_PASSWORD: ci
+          MYSQL_DATABASE: classroom
+        ports: ["3306:3306"]
+        # The same case-insensitive server default Tutor runs, so the schema's
+        # utf8mb4_bin columns are exercised rather than accidentally agreeing.
+        options: >-
+          --health-cmd="mysqladmin ping -uroot -pci"
+          --health-interval=5s --health-timeout=5s --health-retries=20
+          --collation-server=utf8mb4_unicode_ci --character-set-server=utf8mb4
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install
+        run: |
+          pip install -U pip
+          pip install .
+          npm ci
+
+      # Every migration, in order, the way Tutor applies them. This once ran only
+      # 001_init.sql, which left out everything added since.
+      - name: Create the schema
+        env:
+          DATABASE_URL: mysql://root:ci@127.0.0.1:3306/classroom
+        run: python -m classroom_sync.migrate
+
+      # No LMS here, so a login is made up: a fresh key, and tokens signed with it. The
+      # service is told the public half; the smoke test is given a token.
+      - name: Make a test login
+        run: python scripts/make_test_login.py --user teacher --user student --user late --user outsider >> "$GITHUB_ENV"
+
+      - name: Start the server
+        env:
+          DATABASE_URL: mysql://root:ci@127.0.0.1:3306/classroom
+          LIBRARY_BASE_URL: ${{ secrets.LIBRARY_BASE_URL }}
+          LIBRARY_APP_NAME: ${{ secrets.LIBRARY_APP_NAME }}
+          LIBRARY_API_KEY: ${{ secrets.LIBRARY_API_KEY }}
+          HOST_PASSWORD: ci-host-password
+          # JWT_PUBLIC_JWK_SET, JWT_ISSUER and JWT_AUDIENCE come from the step above.
+        run: |
+          uvicorn classroom_sync.app:app --host 127.0.0.1 --port 8000 &
+          for _ in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8000/api/health && break
+            sleep 1
+          done
+
+      - name: Smoke test
+        env:
+          API_URL: http://127.0.0.1:8000
+          HOST_PASSWORD: ci-host-password
+          # AUTH_TOKEN and AUTH_TOKEN_STUDENT / _LATE / _OUTSIDER come from the "Make a test login" step.
+        run: node tests/smoke.mjs
