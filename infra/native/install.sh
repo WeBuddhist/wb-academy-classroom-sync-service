@@ -71,7 +71,11 @@ fi
 if ! sudo -u postgres psql -tAc "select 1 from pg_roles where rolname='wbac'" | grep -q 1; then
   DB_PASSWORD=$(openssl rand -base64 24 | tr -d '/+=' | head -c 24)
   echo "==> Creating database role and database"
-  sudo -u postgres psql -qc "create user wbac with password '${DB_PASSWORD}'"
+  # The SQL goes in on stdin, not as an argument, so the password never shows in the process list.
+  # (DB_PASSWORD is base64 with / + = stripped, so it cannot break out of the SQL string.)
+  sudo -u postgres psql -q <<SQL
+create user wbac with password '${DB_PASSWORD}';
+SQL
   sudo -u postgres createdb -O wbac wbac
   NEW_DB=1
 else
@@ -84,6 +88,9 @@ fi
 # it before dropping to the app user.
 if [[ ! -f /etc/wbac.env ]]; then
   echo "==> Writing /etc/wbac.env (you must fill in the blanks)"
+  # Create it root-only *before* the password goes in, so there is never a moment when it is
+  # readable by anyone else. The chmod below stays as a backstop.
+  install -m 600 -o root -g root /dev/null /etc/wbac.env
   cat > /etc/wbac.env <<EOF
 NODE_ENV=production
 PORT=3000
