@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, model_validator
 
 from .auth import User, current_user
-from .library import LibraryError
+from .library import ID_PATTERN, LibraryError
 from .ratelimit import limit_code_attempts
 from . import notes as notes_store
 from .rooms import (
@@ -50,7 +50,7 @@ class CreateRoomRequest(BaseModel):
     hostPassword: str = Field(min_length=1)
     #: A library text id, from a search. The server resolves it to one edition and
     #: segmentation — never the client, or two students can land on different ids.
-    textId: str = Field(min_length=1)
+    textId: str = Field(pattern=rf"^{ID_PATTERN}$")
     #: What the class is called in a student's list. Defaults to the text's title.
     name: str | None = Field(default=None, max_length=255)
     #: The first and last day the class is held. Both optional.
