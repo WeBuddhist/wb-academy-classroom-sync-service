@@ -289,6 +289,47 @@ def test_guessing_codes_too_fast_is_slowed_down():
     code_attempts.reset()
 
 
+# Routes other than join take a code too. A refusal that differs for "no such class" and "you
+# are not in it" would let someone find live codes without spending join attempts, so every such
+# refusal is charged to the same budget, and both answers turn into 429 once it is spent.
+CODE_ORACLES = [
+    ("post", "/api/rooms/{code}/leave"),
+    ("get", "/api/rooms/{code}/members"),
+    ("post", "/api/rooms/{code}/archive"),
+]
+
+
+@pytest.mark.parametrize("method, path", CODE_ORACLES)
+def test_refusals_that_reveal_a_code_are_throttled_either_way(method, path):
+    missing = path.format(code="ZZZ999")
+    exists = path.format(code="ABC234")
+    first = [getattr(client, method)(missing, headers=auth(OUTSIDER)).status_code for _ in range(30)]
+    assert set(first) == {404}
+    # Budget spent: a code that exists is now indistinguishable from one that does not.
+    assert getattr(client, method)(missing, headers=auth(OUTSIDER)).status_code == 429
+    assert getattr(client, method)(exists, headers=auth(OUTSIDER)).status_code == 429
+
+
+@pytest.mark.parametrize("method, path", CODE_ORACLES)
+def test_not_in_the_class_costs_as_much_as_no_such_class(method, path):
+    exists = path.format(code="ABC234")
+    for _ in range(30):
+        getattr(client, method)(exists, headers=auth(OUTSIDER))
+    assert getattr(client, method)(path.format(code="ZZZ999"), headers=auth(OUTSIDER)).status_code == 429
+
+
+def test_the_budget_is_shared_with_joining_by_code():
+    for n in range(30):
+        client.post(f"/api/rooms/ZZ{n:04d}/join", headers=auth(OUTSIDER))
+    assert client.post("/api/rooms/ZZZ999/leave", headers=auth(OUTSIDER)).status_code == 429
+
+
+def test_using_your_own_class_is_never_charged():
+    for _ in range(100):
+        assert client.get("/api/rooms/ABC234/members", headers=auth(TEACHER)).status_code == 200
+    assert client.post("/api/rooms/ZZZ999/leave", headers=auth(TEACHER)).status_code == 404
+
+
 def test_the_teacher_can_set_when_the_class_is_held():
     response = client.put(
         "/api/rooms/ABC234/dates", headers=auth(TEACHER),

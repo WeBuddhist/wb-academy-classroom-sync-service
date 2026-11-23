@@ -260,3 +260,43 @@ async def test_a_later_translations_error_does_not_undo_an_earlier_one_that_line
         # Nothing at all is routed for ed-3: asking about it fails.
     }))
     assert await library.resolve_translation("t1", "ed-S") == "ed-2"
+
+
+# -- ids go into URL paths, so they must not be able to leave their segment -------------
+
+TRAVERSING_IDS = ["../categories?", "..", "a/b", "a?x=1", "a#b", "%2e%2e", "", "x" * 65, "a b"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad", TRAVERSING_IDS)
+async def test_a_traversing_id_never_reaches_the_library(bad):
+    """The service's API key must only be used on the paths the proxy allowlist permits. A
+    hostile id is refused before any request is made."""
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        return httpx.Response(200, json=[])
+
+    library = client_with(handler)
+    for call in (
+        library.resolve(bad),
+        library.resolve_translation(bad, "ed-A"),
+        library.segment_ids(bad),
+    ):
+        with pytest.raises(LibraryError) as caught:
+            await call
+        assert caught.value.is_not_found
+    assert await library.fetch_text(bad) is None
+    assert seen == []
+
+
+@pytest.mark.asyncio
+async def test_an_id_the_library_returns_is_checked_too():
+    """An edition id read out of a response goes into the next path, so it is held to the
+    same rule as one from a client."""
+    library = client_with(json_route({
+        "/v2/texts/t1/editions": (200, [{"id": "../categories?"}]),
+    }))
+    with pytest.raises(LibraryError):
+        await library.resolve("t1")

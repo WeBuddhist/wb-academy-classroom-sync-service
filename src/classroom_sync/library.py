@@ -14,6 +14,7 @@ mean nothing to the reader showing them.
 """
 
 import asyncio
+import re
 from dataclasses import dataclass
 
 import httpx
@@ -23,6 +24,12 @@ SEGMENT_PAGE_SIZE = 500
 
 #: Editions come in types; the reader asks for critical editions and so do we.
 EDITION_TYPE = "critical"
+
+
+#: Opaque library ids: nanoid-shaped. Same shape the proxy allows (`proxy._ID`), and for the same
+#: reason: an id is put into a URL path, so it must not be able to carry `/`, `..`, `?` or `#`.
+ID_PATTERN = r"[A-Za-z0-9_-]{1,64}"
+_ID_RE = re.compile(rf"^{ID_PATTERN}$")
 
 
 class LibraryError(Exception):
@@ -35,6 +42,19 @@ class LibraryError(Exception):
     @property
     def is_not_found(self) -> bool:
         return self.status == 404
+
+
+def _id(value: str) -> str:
+    """`value`, if it is a plausible library id; otherwise a 404, as the library would say.
+
+    Every id that goes into an upstream path passes through here, whether a client sent it
+    (`textId`) or the library did (an edition id read from a response). Without it, an id like
+    `../categories?` walks out of `/v2/texts/` and the service's API key is used on a path the
+    proxy allowlist would have refused.
+    """
+    if not isinstance(value, str) or not _ID_RE.match(value):
+        raise LibraryError("Not a library id", 404)
+    return value
 
 
 @dataclass(frozen=True)
@@ -152,7 +172,7 @@ class LibraryClient:
         is exactly how a room came to be titled `TxrvC8Fk4GaCAtnFqBehd`.
         """
         try:
-            item = await self._get(f"/v2/texts/{text_id}")
+            item = await self._get(f"/v2/texts/{_id(text_id)}")
         except LibraryError as error:
             if error.is_not_found:
                 return None
@@ -178,7 +198,7 @@ class LibraryClient:
         """
         try:
             editions = await self._get(
-                f"/v2/texts/{text_or_edition_id}/editions",
+                f"/v2/texts/{_id(text_or_edition_id)}/editions",
                 {"edition_type": EDITION_TYPE},
             )
         except LibraryError as error:
@@ -191,7 +211,7 @@ class LibraryClient:
         # re-resolving per student. See docs/socket-contract.md.
         edition_id = (editions or [{}])[0].get("id") or text_or_edition_id
 
-        segmentation = await self._get(f"/v2/editions/{edition_id}/segmentation")
+        segmentation = await self._get(f"/v2/editions/{_id(edition_id)}/segmentation")
         if not segmentation:
             raise LibraryError(
                 f"No segmentation found for '{text_or_edition_id}'", 404
@@ -221,13 +241,13 @@ class LibraryClient:
         accepts both). The pairs themselves are read by the browser, so this service
         still handles ids and nothing else.
         """
-        text = await self._get(f"/v2/texts/{text_id}")
+        text = await self._get(f"/v2/texts/{_id(text_id)}")
         translation_ids = (text or {}).get("translations") or []
 
         async def first_edition(translation_id: str) -> str | None:
             try:
                 editions = await self._get(
-                    f"/v2/texts/{translation_id}/editions",
+                    f"/v2/texts/{_id(translation_id)}/editions",
                     {"edition_type": EDITION_TYPE},
                 )
             except LibraryError as error:
@@ -265,7 +285,7 @@ class LibraryClient:
             (other_edition_id, source_edition_id),
         ):
             page = await self._get(
-                f"/v2/editions/{first}/alignments/{second}",
+                f"/v2/editions/{_id(first)}/alignments/{_id(second)}",
                 {"limit": 1, "offset": 0},
             )
             if (page or {}).get("items"):
@@ -286,7 +306,7 @@ class LibraryClient:
         offset = 0
         while True:
             page = await self._get(
-                f"/v2/editions/{edition_id}/segmentation/segments",
+                f"/v2/editions/{_id(edition_id)}/segmentation/segments",
                 {"limit": SEGMENT_PAGE_SIZE, "offset": offset},
             )
             items = page.get("items") or []

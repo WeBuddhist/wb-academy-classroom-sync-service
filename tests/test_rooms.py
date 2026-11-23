@@ -7,6 +7,7 @@ is most of what matters: a guessable code, a leaky comparison, a code that will 
 match what a student typed.
 """
 
+import pytest
 import secrets
 import string
 
@@ -77,3 +78,22 @@ def test_comparisons_are_constant_time():
     from classroom_sync import rooms
 
     assert "compare_digest" in inspect.getsource(rooms.password_matches)
+
+
+# -- the text id a class is made from ---------------------------------------------------
+
+
+@pytest.mark.parametrize("bad", ["../categories?", "a/b", "a?x=1", "a#b", "", "x" * 65])
+def test_create_room_refuses_a_text_id_that_is_not_an_id(bad):
+    from pydantic import ValidationError
+
+    from classroom_sync.routes import CreateRoomRequest
+
+    with pytest.raises(ValidationError):
+        CreateRoomRequest(hostPassword="x", textId=bad)
+
+
+def test_create_room_accepts_an_ordinary_library_id():
+    from classroom_sync.routes import CreateRoomRequest
+
+    assert CreateRoomRequest(hostPassword="x", textId="TxrvC8Fk4GaCAtnFqBehd").textId

@@ -15,8 +15,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, model_validator
 
 from .auth import User, current_user
-from .library import LibraryError
-from .ratelimit import limit_code_attempts
+from .library import ID_PATTERN, LibraryError
+from .ratelimit import charge_code_miss, limit_code_attempts
 from . import notes as notes_store
 from .rooms import (
     RoomError,
@@ -50,7 +50,7 @@ class CreateRoomRequest(BaseModel):
     hostPassword: str = Field(min_length=1)
     #: A library text id, from a search. The server resolves it to one edition and
     #: segmentation — never the client, or two students can land on different ids.
-    textId: str = Field(min_length=1)
+    textId: str = Field(pattern=rf"^{ID_PATTERN}$")
     #: What the class is called in a student's list. Defaults to the text's title.
     name: str | None = Field(default=None, max_length=255)
     #: The first and last day the class is held. Both optional.
@@ -242,9 +242,21 @@ def _iso(value) -> str | None:
     return value.isoformat() if value is not None else None
 
 
-async def _room_or_404(request: Request, code: str):
+def _refuse(user: User, status_code: int, detail: str) -> HTTPException:
+    """A refusal that says something about a code (it exists, or it does not), charged to the
+    account's code-guessing budget. Raises 429 instead if that budget is spent. See
+    `ratelimit.charge_code_miss`."""
+    charge_code_miss(user.id)
+    return HTTPException(status_code=status_code, detail=detail)
+
+
+async def _room_or_404(request: Request, code: str, user: User | None = None):
+    """The room for a code, or 404. Pass `user` on any route not already throttled by
+    `limit_code_attempts`, so a miss counts against them."""
     room = await get_room(request.app.state.database.pool, code)
     if room is None:
+        if user is not None:
+            raise _refuse(user, 404, "No such class")
         raise HTTPException(status_code=404, detail="No such class")
     return room
 
@@ -255,9 +267,9 @@ async def _host_room(request: Request, code: str, user: User):
     404 for a room that does not exist and 403 for one you do not teach. Telling them apart
     leaks only that a code exists, which `GET /api/rooms/{code}` already says.
     """
-    room = await _room_or_404(request, code)
+    room = await _room_or_404(request, code, user)
     if not is_host(room, user):
-        raise HTTPException(status_code=403, detail="Only this class's teacher can do that")
+        raise _refuse(user, 403, "Only this class's teacher can do that")
     return room
 
 
@@ -354,12 +366,12 @@ async def post_leave(request: Request, code: str, user: User = Depends(current_u
     without the code; their notes are kept. The teacher cannot leave: ending the session or
     archiving the class is how they finish. (A teacher *removing* someone is different: that
     deletes the membership, and the code is needed again.)"""
-    room = await _room_or_404(request, code)
+    room = await _room_or_404(request, code, user)
     if is_host(room, user):
         raise HTTPException(status_code=400, detail="The teacher cannot leave their own class")
     pool = request.app.state.database.pool
     if not await leave_member(pool, room.id, user.id):
-        raise HTTPException(status_code=404, detail="You are not in this class")
+        raise _refuse(user, 404, "You are not in this class")
     live = getattr(request.app.state, "live", None)
     if live is not None:
         await live.kick(room, user.id, "member:left")
@@ -492,10 +504,10 @@ async def _notes_room(request: Request, code: str, user: User, *, write: bool):
     stays allowed: it is the student's own record.
     """
     pool = request.app.state.database.pool
-    room = await _room_or_404(request, code)
+    room = await _room_or_404(request, code, user)
     member = await get_member(pool, room.id, user.id)
     if member is None:
-        raise HTTPException(status_code=403, detail="Join the class first")
+        raise _refuse(user, 403, "Join the class first")
     if member.role != notes_store.NOTES_ROLE:
         raise HTTPException(status_code=403, detail="Notes are for students")
     if write and not room.is_live:
