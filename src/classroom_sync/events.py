@@ -28,6 +28,7 @@ from .auth import (
     User,
     token_from_cookies,
 )
+from .ratelimit import TOO_MANY, code_attempts
 from .rooms import (
     get_member,
     get_room,
@@ -248,17 +249,25 @@ def attach(sio: socketio.AsyncServer, get_pool, get_authenticator, web_origins) 
             payload = payload or {}
             code = str(payload.get("code") or "")
 
+            # A refusal that says anything about a code is charged to the same budget as
+            # joining by code, so this cannot be used to find live codes for free. See
+            # `ratelimit.charge_code_miss`.
             room = await get_room(get_pool(), code)
             if room is None:
+                if not code_attempts.hit(user.id):
+                    return {"ok": False, "error": TOO_MANY}
                 return {"ok": False, "error": "No class with that code."}
-            if not room.is_live:
-                return {"ok": False, "error": "That class has been archived."}
 
             # The account is the credential. Knowing the code is not enough to be *in* a
-            # class, only to become a member of it, which is done over HTTP.
+            # class, only to become a member of it, which is done over HTTP. Membership is
+            # checked before "archived" so a stranger learns nothing about a class's state.
             member = await get_member(get_pool(), room.id, user.id)
             if member is None:
+                if not code_attempts.hit(user.id):
+                    return {"ok": False, "error": TOO_MANY}
                 return {"ok": False, "error": "You are not in this class. Join it with its code first."}
+            if not room.is_live:
+                return {"ok": False, "error": "That class has been archived."}
             if member.left_at is not None:
                 return {"ok": False, "error": "You left this class. Rejoin it from your list first."}
 

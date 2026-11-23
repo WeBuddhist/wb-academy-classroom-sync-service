@@ -52,12 +52,30 @@ class RateLimiter:
 code_attempts = RateLimiter(limit=30, window=60)
 
 
+TOO_MANY = "Too many attempts. Wait a minute and try again."
+
+
+def _too_many() -> HTTPException:
+    return HTTPException(status_code=429, detail=TOO_MANY, headers={"Retry-After": "60"})
+
+
 async def limit_code_attempts(user: User = Depends(current_user)) -> User:
     """FastAPI dependency: the logged-in user, unless they are guessing codes too fast."""
     if not code_attempts.hit(user.id):
-        raise HTTPException(
-            status_code=429,
-            detail="Too many attempts. Wait a minute and try again.",
-            headers={"Retry-After": "60"},
-        )
+        raise _too_many()
     return user
+
+
+def charge_code_miss(user_id: str) -> None:
+    """Count one attempt that got nowhere: a code with no class, or a class this account is
+    not in (or does not teach). Raises 429 when the account is over its limit.
+
+    Routes other than join and lookup take a code too, and answer differently for a code that
+    exists and one that does not. Left alone, that tells a guesser which codes are live without
+    spending a single join attempt. So every such refusal is charged to the *same* budget as
+    join, whichever way it falls: once the budget is spent both answers become 429 and the
+    difference is gone. A member or teacher using their own class is never refused here, so is
+    never charged.
+    """
+    if not code_attempts.hit(user_id):
+        raise _too_many()

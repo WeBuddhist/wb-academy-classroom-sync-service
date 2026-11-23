@@ -301,3 +301,19 @@ def test_a_student_who_left_can_still_read_their_notes_but_not_add_to_them(world
     assert response.status_code == 403
     assert "rejoin" in response.json()["detail"].lower()
     assert not [c for c in world.calls if c[0] == "create"]
+
+
+# -- the notes routes take a code too: see ratelimit.charge_code_miss ----------------------
+
+
+def test_notes_refusals_that_reveal_a_code_are_throttled_either_way(world):
+    for _ in range(30):
+        assert send("get", "/api/rooms/ZZZ999/notes", OUTSIDER).status_code == 404
+    assert send("get", "/api/rooms/ZZZ999/notes", OUTSIDER).status_code == 429
+    # A class that exists, which the account is not in, now answers the same way.
+    assert send("get", URL, OUTSIDER).status_code == 429
+
+
+def test_reading_your_own_notes_is_never_charged(world):
+    for _ in range(100):
+        assert send("get", URL, STUDENT).status_code == 200

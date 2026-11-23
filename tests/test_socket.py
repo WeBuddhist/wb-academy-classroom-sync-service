@@ -300,6 +300,33 @@ async def test_someone_who_is_not_a_member_cannot_enter_even_with_the_code(clien
 
 
 @pytest.mark.asyncio
+async def test_guessing_codes_over_the_socket_is_throttled_like_joining(clients, world):
+    """room:join answers differently for no class and not-a-member, so it is charged to the
+    same budget as joining by code; past it, both answers are the same."""
+    outsider = await clients(OUTSIDER)
+    for _ in range(30):
+        assert (await outsider.join("ZZZ999"))["ok"] is False
+    unknown = await outsider.join("ZZZ999")
+    exists = await outsider.join("ABC234")
+    assert unknown == exists
+    assert "Too many attempts" in unknown["error"]
+
+
+@pytest.mark.asyncio
+async def test_a_member_rejoining_is_never_charged(clients, world):
+    student = await clients(STUDENT)
+    for _ in range(40):
+        assert (await student.join())["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_stranger_learns_nothing_about_an_archived_class(clients, world):
+    world.room = a_room(is_live=False)
+    result = await (await clients(OUTSIDER)).join()
+    assert "archived" not in result["error"]
+
+
+@pytest.mark.asyncio
 async def test_an_unknown_code_is_refused(clients, world):
     assert (await (await clients(STUDENT)).join("ZZZ999"))["ok"] is False
 
